@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>QFF-TSM Spread 48h</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <script
+      src="https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js"
+      defer
+    ></script>
+    <script src="./app.js" defer></script>
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <h1>QFF-TSM Spread</h1>
+          <p id="rangeLabel">Loading...</p>
+        </div>
+        <div class="stats" aria-label="summary">
+          <div>
+            <span>Spread</span>
+            <strong id="lastSpread">--</strong>
+          </div>
+          <div>
+            <span>Min / Max</span>
+            <strong id="spreadRange">--</strong>
+          </div>
+          <div>
+            <span>QFF Fill</span>
+            <strong id="fillCount">--</strong>
+          </div>
+        </div>
+      </header>
+
+      <section class="chart-panel chart-panel-main">
+        <div class="panel-head">
+          <h2>Spread</h2>
+          <div id="spreadLegend" class="legend">--</div>
+        </div>
+        <div id="spreadChart" class="chart"></div>
+      </section>
+
+      <section class="chart-panel chart-panel-secondary">
+        <div class="panel-head">
+          <h2>Fair Value vs QFF</h2>
+          <div id="priceLegend" class="legend">--</div>
+        </div>
+        <div id="priceChart" class="chart"></div>
+      </section>
+
+      <div id="errorBox" class="error" hidden></div>
+    </main>
+  </body>
+</html>
