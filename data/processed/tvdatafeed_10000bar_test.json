@@ -1,0 +1,67 @@
+{
+  "generated_at": "2026-06-23T18:17:10.067454+00:00",
+  "results": [
+    {
+      "exchange": "BINANCE",
+      "symbol": "TSMUSDT.P",
+      "attempt": 1,
+      "ok": true,
+      "seconds": 1.817,
+      "rows": 10000,
+      "first_index": "2026-06-16 18:27:00",
+      "last_index": "2026-06-24 02:17:00",
+      "first_close": 441.31,
+      "last_close": 440.16,
+      "error_type": null,
+      "error": null
+    },
+    {
+      "exchange": "TAIFEX",
+      "symbol": "QFF1!",
+      "attempt": 1,
+      "ok": true,
+      "seconds": 1.068,
+      "rows": 5098,
+      "first_index": "2026-06-12 17:25:00",
+      "last_index": "2026-06-24 02:01:00",
+      "first_close": 2320.0,
+      "last_close": 2445.0,
+      "error_type": null,
+      "error": null
+    }
+  ],
+  "summary": {
+    "BINANCE:TSMUSDT.P": {
+      "attempts": 1,
+      "successes": 1,
+      "failures": 0,
+      "success_rate": 1.0,
+      "median_seconds": 1.817,
+      "rows_each_success": [
+        10000
+      ],
+      "last_success_range": {
+        "first_index": "2026-06-16 18:27:00",
+        "last_index": "2026-06-24 02:17:00",
+        "last_close": 440.16
+      },
+      "errors": []
+    },
+    "TAIFEX:QFF1!": {
+      "attempts": 1,
+      "successes": 1,
+      "failures": 0,
+      "success_rate": 1.0,
+      "median_seconds": 1.068,
+      "rows_each_success": [
+        5098
+      ],
+      "last_success_range": {
+        "first_index": "2026-06-12 17:25:00",
+        "last_index": "2026-06-24 02:01:00",
+        "last_close": 2445.0
+      },
+      "errors": []
+    }
+  }
+}

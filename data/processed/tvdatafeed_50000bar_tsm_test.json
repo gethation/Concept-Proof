@@ -1,0 +1,37 @@
+{
+  "generated_at": "2026-06-23T18:17:36.066772+00:00",
+  "results": [
+    {
+      "exchange": "BINANCE",
+      "symbol": "TSMUSDT.P",
+      "attempt": 1,
+      "ok": true,
+      "seconds": 2.159,
+      "rows": 12010,
+      "first_index": "2026-06-15 08:00:00",
+      "last_index": "2026-06-24 02:17:00",
+      "first_close": 429.46,
+      "last_close": 440.35,
+      "error_type": null,
+      "error": null
+    }
+  ],
+  "summary": {
+    "BINANCE:TSMUSDT.P": {
+      "attempts": 1,
+      "successes": 1,
+      "failures": 0,
+      "success_rate": 1.0,
+      "median_seconds": 2.159,
+      "rows_each_success": [
+        12010
+      ],
+      "last_success_range": {
+        "first_index": "2026-06-15 08:00:00",
+        "last_index": "2026-06-24 02:17:00",
+        "last_close": 440.35
+      },
+      "errors": []
+    }
+  }
+}

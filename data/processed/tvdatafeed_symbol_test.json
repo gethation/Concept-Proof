@@ -1,0 +1,195 @@
+{
+  "generated_at": "2026-06-23T18:11:31.886386+00:00",
+  "results": [
+    {
+      "exchange": "BINANCE",
+      "symbol": "TSNUSDT.P",
+      "attempt": 1,
+      "ok": false,
+      "seconds": 5.366,
+      "rows": 0,
+      "first_index": null,
+      "last_index": null,
+      "first_close": null,
+      "last_close": null,
+      "error_type": "RuntimeError",
+      "error": "tvdatafeed returned None"
+    },
+    {
+      "exchange": "BINANCE",
+      "symbol": "TSMUSDT.P",
+      "attempt": 1,
+      "ok": true,
+      "seconds": 0.432,
+      "rows": 120,
+      "first_index": "2026-06-24 00:12:00",
+      "last_index": "2026-06-24 02:11:00",
+      "first_close": 444.71,
+      "last_close": 440.2,
+      "error_type": null,
+      "error": null
+    },
+    {
+      "exchange": "TAIFEX",
+      "symbol": "QFF1!",
+      "attempt": 1,
+      "ok": true,
+      "seconds": 0.319,
+      "rows": 120,
+      "first_index": "2026-06-23 23:30:00",
+      "last_index": "2026-06-24 01:54:00",
+      "first_close": 2440.0,
+      "last_close": 2445.0,
+      "error_type": null,
+      "error": null
+    },
+    {
+      "exchange": "BINANCE",
+      "symbol": "TSNUSDT.P",
+      "attempt": 2,
+      "ok": false,
+      "seconds": 5.269,
+      "rows": 0,
+      "first_index": null,
+      "last_index": null,
+      "first_close": null,
+      "last_close": null,
+      "error_type": "RuntimeError",
+      "error": "tvdatafeed returned None"
+    },
+    {
+      "exchange": "BINANCE",
+      "symbol": "TSMUSDT.P",
+      "attempt": 2,
+      "ok": true,
+      "seconds": 0.282,
+      "rows": 120,
+      "first_index": "2026-06-24 00:12:00",
+      "last_index": "2026-06-24 02:11:00",
+      "first_close": 444.71,
+      "last_close": 440.11,
+      "error_type": null,
+      "error": null
+    },
+    {
+      "exchange": "TAIFEX",
+      "symbol": "QFF1!",
+      "attempt": 2,
+      "ok": true,
+      "seconds": 0.322,
+      "rows": 120,
+      "first_index": "2026-06-23 23:30:00",
+      "last_index": "2026-06-24 01:54:00",
+      "first_close": 2440.0,
+      "last_close": 2445.0,
+      "error_type": null,
+      "error": null
+    },
+    {
+      "exchange": "BINANCE",
+      "symbol": "TSNUSDT.P",
+      "attempt": 3,
+      "ok": false,
+      "seconds": 5.248,
+      "rows": 0,
+      "first_index": null,
+      "last_index": null,
+      "first_close": null,
+      "last_close": null,
+      "error_type": "RuntimeError",
+      "error": "tvdatafeed returned None"
+    },
+    {
+      "exchange": "BINANCE",
+      "symbol": "TSMUSDT.P",
+      "attempt": 3,
+      "ok": true,
+      "seconds": 0.326,
+      "rows": 120,
+      "first_index": "2026-06-24 00:12:00",
+      "last_index": "2026-06-24 02:11:00",
+      "first_close": 444.71,
+      "last_close": 440.12,
+      "error_type": null,
+      "error": null
+    },
+    {
+      "exchange": "TAIFEX",
+      "symbol": "QFF1!",
+      "attempt": 3,
+      "ok": true,
+      "seconds": 0.263,
+      "rows": 120,
+      "first_index": "2026-06-23 23:30:00",
+      "last_index": "2026-06-24 01:54:00",
+      "first_close": 2440.0,
+      "last_close": 2445.0,
+      "error_type": null,
+      "error": null
+    }
+  ],
+  "summary": {
+    "BINANCE:TSMUSDT.P": {
+      "attempts": 3,
+      "successes": 3,
+      "failures": 0,
+      "success_rate": 1.0,
+      "median_seconds": 0.326,
+      "rows_each_success": [
+        120,
+        120,
+        120
+      ],
+      "last_success_range": {
+        "first_index": "2026-06-24 00:12:00",
+        "last_index": "2026-06-24 02:11:00",
+        "last_close": 440.12
+      },
+      "errors": []
+    },
+    "BINANCE:TSNUSDT.P": {
+      "attempts": 3,
+      "successes": 0,
+      "failures": 3,
+      "success_rate": 0.0,
+      "median_seconds": null,
+      "rows_each_success": [],
+      "last_success_range": null,
+      "errors": [
+        {
+          "attempt": 1,
+          "error_type": "RuntimeError",
+          "error": "tvdatafeed returned None"
+        },
+        {
+          "attempt": 2,
+          "error_type": "RuntimeError",
+          "error": "tvdatafeed returned None"
+        },
+        {
+          "attempt": 3,
+          "error_type": "RuntimeError",
+          "error": "tvdatafeed returned None"
+        }
+      ]
+    },
+    "TAIFEX:QFF1!": {
+      "attempts": 3,
+      "successes": 3,
+      "failures": 0,
+      "success_rate": 1.0,
+      "median_seconds": 0.319,
+      "rows_each_success": [
+        120,
+        120,
+        120
+      ],
+      "last_success_range": {
+        "first_index": "2026-06-23 23:30:00",
+        "last_index": "2026-06-24 01:54:00",
+        "last_close": 2445.0
+      },
+      "errors": []
+    }
+  }
+}
