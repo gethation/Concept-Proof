@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>QFF-TSM 回測報告</title>
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f7f8fa;
+      --panel: #ffffff;
+      --text: #18202a;
+      --muted: #637083;
+      --line: #d9dee7;
+      --blue: #2563eb;
+      --green: #15803d;
+      --red: #b91c1c;
+      --amber: #b45309;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans TC", sans-serif;
+      line-height: 1.5;
+    }
+    header {
+      padding: 28px 32px 12px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel);
+    }
+    main { padding: 24px 32px 36px; }
+    h1, h2 { margin: 0; letter-spacing: 0; }
+    h1 { font-size: 28px; }
+    h2 { font-size: 18px; margin-bottom: 14px; }
+    .subtitle { margin-top: 6px; color: var(--muted); }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+      margin-bottom: 22px;
+    }
+    .metric-card, .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
+    }
+    .metric-card { padding: 16px; }
+    .metric-label { color: var(--muted); font-size: 13px; }
+    .metric-value { margin-top: 4px; font-size: 24px; font-weight: 700; }
+    .metric-subtitle { margin-top: 4px; color: var(--muted); font-size: 12px; }
+    .positive .metric-value, .positive { color: var(--green); }
+    .negative .metric-value, .negative { color: var(--red); }
+    .neutral { color: inherit; }
+    .panel { padding: 16px; margin-bottom: 18px; }
+    .chart { width: 100%; height: 430px; }
+    #drawdown-chart { height: 300px; }
+    .two-col {
+      display: grid;
+      grid-template-columns: minmax(280px, 420px) minmax(0, 1fr);
+      gap: 18px;
+      align-items: start;
+    }
+    .params-table, .trades-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    .params-table th, .params-table td,
+    .trades-table th, .trades-table td {
+      border-bottom: 1px solid var(--line);
+      padding: 8px 10px;
+      text-align: left;
+      vertical-align: top;
+      white-space: nowrap;
+    }
+    .params-table th { width: 160px; color: var(--muted); font-weight: 600; }
+    .trades-table th {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      background: #eef2f7;
+      color: #334155;
+      font-weight: 700;
+    }
+    .table-wrap {
+      max-height: 560px;
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+    .number { text-align: right !important; font-variant-numeric: tabular-nums; }
+    .empty-state { color: var(--muted); }
+    .section-note {
+      margin: -6px 0 12px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    @media (max-width: 980px) {
+      header, main { padding-left: 16px; padding-right: 16px; }
+      .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .two-col { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 640px) {
+      .grid { grid-template-columns: 1fr; }
+      h1 { font-size: 23px; }
+      .metric-value { font-size: 20px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>QFF-TSM 回測報告</h1>
+    <div class="subtitle">資料區間：2026-05-08 17:25:00+08:00 到 2026-06-22 13:44:00+08:00</div>
+  </header>
+  <main>
+    <section class="grid">
+      
+        <section class="metric-card positive">
+          <div class="metric-label">Net PnL</div>
+          <div class="metric-value">256,436.70 TWD</div>
+          <div class="metric-subtitle">Gross 324,762.03 / Fee 68,325.33</div>
+        </section>
+        
+
+        <section class="metric-card positive">
+          <div class="metric-label">Return</div>
+          <div class="metric-value">12.82%</div>
+          <div class="metric-subtitle">Final equity 2,256,436.70 TWD</div>
+        </section>
+        
+
+        <section class="metric-card neutral">
+          <div class="metric-label">Trades</div>
+          <div class="metric-value">66</div>
+          <div class="metric-subtitle">Win rate 78.79%</div>
+        </section>
+        
+
+        <section class="metric-card negative">
+          <div class="metric-label">Max Drawdown</div>
+          <div class="metric-value">-1.76%</div>
+          <div class="metric-subtitle">-37,704.52 TWD</div>
+        </section>
+        
+
+        <section class="metric-card neutral">
+          <div class="metric-label">Total Fee</div>
+          <div class="metric-value">68,325.33 TWD</div>
+          <div class="metric-subtitle">TSM 62,998.33 / QFF 2,720.00 / Tax 2,607.00</div>
+        </section>
+        
+
+        <section class="metric-card neutral">
+          <div class="metric-label">Exposure</div>
+          <div class="metric-value">45.78%</div>
+          <div class="metric-subtitle">29,567 minutes</div>
+        </section>
+        
+    </section>
+
+    <section class="panel">
+      <h2>Equity Curve (Daily)</h2>
+      <div id="equity-chart" class="chart"></div>
+    </section>
+
+    <section class="panel">
+      <h2>Drawdown (%)</h2>
+      <div id="drawdown-chart" class="chart"></div>
+    </section>
+
+    <section class="two-col">
+      <section class="panel">
+        <h2>回測參數</h2>
+        <table class="params-table"><tbody><tr><th>Data range</th><td>2026-05-08 17:25:00+08:00 to 2026-06-22 13:44:00+08:00</td></tr>
+<tr><th>Rows</th><td>29,909</td></tr>
+<tr><th>Entry Z</th><td>2.00</td></tr>
+<tr><th>Exit Z</th><td>1.00</td></tr>
+<tr><th>Target leg notional</th><td>1,000,000.00 TWD</td></tr>
+<tr><th>Initial capital</th><td>2,000,000.00 TWD</td></tr>
+<tr><th>Max entry delay</th><td>15 minutes</td></tr>
+<tr><th>TSM fee</th><td>5.00 bps per side</td></tr>
+<tr><th>QFF fee</th><td>5.00 TWD/contract/side</td></tr>
+<tr><th>QFF tax rate</th><td>0.000020</td></tr>
+<tr><th>QFF multiplier</th><td>100.00</td></tr>
+<tr><th>Weekend close-only minutes</th><td>4,872</td></tr>
+<tr><th>Week-end force-close points</th><td>7</td></tr>
+<tr><th>Week-end forced exits</th><td>0</td></tr>
+<tr><th>Fee defaults as of</th><td>2026-06-17</td></tr></tbody></table>
+      </section>
+
+      <section class="panel">
+        <h2>交易清單</h2>
+        <p class="section-note">Gross %、Fee %、Net % 皆以該筆 Leg TWD 為分母。</p>
+        
+    <div class="table-wrap">
+      <table class="trades-table">
+        <thead><tr><th>Entry</th><th>Exit</th><th>Direction</th><th>Entry Z</th><th>Exit Z</th><th>Hold Min</th><th>QFF Ctr</th><th>Leg TWD</th><th>Gross %</th><th>Fee %</th><th>Net %</th><th>Exit Reason</th></tr></thead>
+        <tbody><tr><td>2026-05-11 13:32:00+08:00</td><td>2026-05-11 18:25:00+08:00</td><td>short_tsm_long_qff</td><td class="number">1.81</td><td class="number">-0.45</td><td class="number">293</td><td class="number">4</td><td class="number">902,000.00</td><td class="number positive">0.76%</td><td class="number">0.11%</td><td class="number positive">0.65%</td><td>zscore_exit</td></tr><tr><td>2026-05-11 21:21:00+08:00</td><td>2026-05-11 21:34:00+08:00</td><td>short_tsm_long_qff</td><td class="number">1.02</td><td class="number">-2.62</td><td class="number">13</td><td class="number">4</td><td class="number">902,000.00</td><td class="number positive">0.91%</td><td class="number">0.11%</td><td class="number positive">0.81%</td><td>zscore_exit</td></tr><tr><td>2026-05-11 21:36:00+08:00</td><td>2026-05-12 08:55:00+08:00</td><td>long_tsm_short_qff</td><td class="number">-1.30</td><td class="number">0.81</td><td class="number">679</td><td class="number">-4</td><td class="number">898,000.00</td><td class="number positive">0.57%</td><td class="number">0.11%</td><td class="number positive">0.46%</td><td>zscore_exit</td></tr><tr><td>2026-05-12 09:04:00+08:00</td><td>2026-05-12 09:26:00+08:00</td><td>long_tsm_short_qff</td><td class="number">-0.72</td><td class="number">1.23</td><td class="number">22</td><td class="number">-4</td><td class="number">904,000.00</td><td class="number positive">0.45%</td><td class="number">0.11%</td><td class="number positive">0.34%</td><td>zscore_exit</td></tr><tr><td>2026-05-12 09:28:00+08:00</td><td>2026-05-12 11:07:00+08:00</td><td>short_tsm_long_qff</td><td class="number">2.14</td><td class="number">-2.16</td><td class="number">99</td><td class="number">4</td><td class="number">894,000.00</td><td class="number positive">0.77%</td><td class="number">0.11%</td><td class="number positive">0.67%</td><td>zscore_exit</td></tr><tr><td>2026-05-12 11:10:00+08:00</td><td>2026-05-12 19:05:00+08:00</td><td>long_tsm_short_qff</td><td class="number">-0.93</td><td class="number">1.34</td><td class="number">475</td><td class="number">-4</td><td class="number">906,000.00</td><td class="number positive">0.80%</td><td class="number">0.11%</td><td class="number positive">0.69%</td><td>zscore_exit</td></tr><tr><td>2026-05-12 20:48:00+08:00</td><td>2026-05-13 09:03:00+08:00</td><td>short_tsm_long_qff</td><td class="number">1.52</td><td class="number">-0.87</td><td class="number">735</td><td class="number">5</td><td class="number">1,107,500.00</td><td class="number positive">0.26%</td><td class="number">0.11%</td><td class="number positive">0.16%</td><td>zscore_exit</td></tr><tr><td>2026-05-13 09:50:00+08:00</td><td>2026-05-13 20:32:00+08:00</td><td>long_tsm_short_qff</td><td class="number">-2.03</td><td class="number">0.91</td><td class="number">642</td><td class="number">-4</td><td class="number">892,000.00</td><td class="number positive">0.96%</td><td class="number">0.11%</td><td class="number positive">0.85%</td><td>zscore_exit</td></tr><tr><td>2026-05-13 21:38:00+08:00</td><td>2026-05-14 00:49:00+08:00</td><td>long_tsm_short_qff</td><td class="number">-2.31</td><td class="number">1.05</td><td class="number">191</td><td class="number">-5</td><td class="number">1,107,500.00</td><td class="number positive">1.19%</td><td class="number">0.11%</td><td class="number positive">1.08%</td><td>zscore_exit</td></tr><tr><td>2026-05-14 12:16:00+08:00</td><td>2026-05-14 21:35:00+08:00</td><td>long_tsm_short_qff</td><td class="number">-2.49</td><td class="number">2.18</td><td class="number">559</td><td class="number">-4</td><td class="number">902,000.00</td><td class="number positive">0.96%</td><td class="number">0.11%</td><td class="number positive">0.85%</td><td>zscore_exit</td></tr><tr><td>2026-05-14 21:38:00+08:00</td><td>2026-05-15 10:06:00+08:00</td><td>short_tsm_long_qff</td><td class="number">3.61</td><td class="number">-0.61</td><td class="number">748</td><td class="number">4</td><td class="number">908,000.00</td><td class="number negative">-0.66%</td><td class="number">0.11%</td><td class="number negative">-0.77%</td><td>zscore_exit</td></tr><tr><td>2026-05-15 10:21:00+08:00</td><td>2026-05-15 17:26:00+08:00</td><td>long_tsm_short_qff</td><td class="number">-1.97</td><td class="number">1.99</td><td class="number">425</td><td class="number">-4</td><td class="number">914,000.00</td><td class="number positive">0.97%</td><td class="number">0.11%</td><td class="number positive">0.86%</td><td>zscore_exit</td></tr><tr><td>2026-05-18 08:49:00+08:00</td><td>2026-05-18 17:59:00+08:00</td><td>long_tsm_short_qff</td><td class="number">-2.38</td><td class="number">1.10</td><td class="number">550</td><td class="number">-4</td><td class="number">890,000.00</td><td class="number positive">0.42%</td><td class="number">0.11%</td><td class="number positive">0.31%</td><td>zscore_exit</td></tr><tr><td>2026-05-18 21:30:00+08:00</td><td>2026-05-19 08:48:00+08:00</td><td>long_tsm_short_qff</td><td class="number">-2.96</td><td class="number">1.01</td><td class="number">678</td><td class="number">-4</td><td class="number">908,000.00</td><td class="number negative">-0.66%</td><td class="number">0.11%</td><td class="number negative">-0.77%</td><td>zscore_exit</td></tr><tr><td>2026-05-19 09:56:00+08:00</td><td>2026-05-19 22:14:00+08:00</td><td>short_tsm_long_qff</td><td class="number">2.01</td><td class="number">-1.86</td><td class="number">738</td><td class="number">5</td><td class="number">1,110,000.00</td><td class="number positive">0.07%</td><td class="number">0.11%</td><td class="number negative">-0.04%</td><td>zscore_exit</td></tr><tr><td>2026-05-19 22:17:00+08:00</td><td>2026-05-19 23:53:00+08:00</td><td>long_tsm_short_qff</td><td class="number">-2.30</td><td class="number">0.41</td><td class="number">96</td><td class="number">-5</td><td class="number">1,092,500.00</td><td class="number positive">0.77%</td><td class="number">0.11%</td><td class="number positive">0.66%</td><td>zscore_exit</td></tr><tr><td>2026-05-20 00:08:00+08:00</td><td>2026-05-20 13:06:00+08:00</td><td>short_tsm_long_qff</td><td class="number">2.13</td><td class="number">0.32</td><td class="number">778</td><td class="number">5</td><td class="number">1,100,000.00</td><td class="number negative">-0.08%</td><td class="number">0.11%</td><td class="number negative">-0.18%</td><td>zscore_exit</td></tr><tr><td>2026-05-20 17:26:00+08:00</td><td>2026-05-21 01:14:00+08:00</td><td>long_tsm_short_qff</td><td class="number">-5.48</td><td class="number">1.12</td><td class="number">468</td><td class="number">-4</td><td class="number">892,000.00</td><td class="number positive">0.50%</td><td class="number">0.11%</td><td class="number positive">0.39%</td><td>zscore_exit</td></tr><tr><td>2026-05-21 04:29:00+08:00</td><td>2026-05-21 11:04:00+08:00</td><td>short_tsm_long_qff</td><td class="number">2.20</td><td class="number">-0.42</td><td class="number">395</td><td class="number">4</td><td class="number">904,000.00</td><td class="number positive">0.14%</td><td class="number">0.11%</td><td class="number positive">0.03%</td><td>zscore_exit</td></tr><tr><td>2026-05-21 13:26:00+08:00</td><td>2026-05-21 17:27:00+08:00</td><td>short_tsm_long_qff</td><td class="number">1.99</td><td class="number">-1.08</td><td class="number">241</td><td class="number">4</td><td class="number">902,000.00</td><td class="number positive">0.94%</td><td class="number">0.11%</td><td class="number positive">0.83%</td><td>zscore_exit</td></tr><tr><td>2026-05-21 18:48:00+08:00</td><td>2026-05-21 21:31:00+08:00</td><td>long_tsm_short_qff</td><td class="number">-2.12</td><td class="number">1.06</td><td class="number">163</td><td class="number">-4</td><td class="number">900,000.00</td><td class="number positive">0.93%</td><td class="number">0.11%</td><td class="number positive">0.82%</td><td>zscore_exit</td></tr><tr><td>2026-05-21 21:35:00+08:00</td><td>2026-05-22 12:18:00+08:00</td><td>short_tsm_long_qff</td><td class="number">2.35</td><td class="number">-0.61</td><td class="number">883</td><td class="number">4</td><td class="number">902,000.00</td><td class="number positive">0.28%</td><td class="number">0.11%</td><td class="number positive">0.17%</td><td>zscore_exit</td></tr><tr><td>2026-05-25 08:53:00+08:00</td><td>2026-05-25 09:18:00+08:00</td><td>short_tsm_long_qff</td><td class="number">1.95</td><td class="number">-1.00</td><td class="number">25</td><td class="number">4</td><td class="number">920,000.00</td><td class="number positive">0.97%</td><td class="number">0.11%</td><td class="number positive">0.86%</td><td>zscore_exit</td></tr><tr><td>2026-05-25 09:36:00+08:00</td><td>2026-05-25 11:50:00+08:00</td><td>long_tsm_short_qff</td><td class="number">-1.82</td><td class="number">0.76</td><td class="number">134</td><td class="number">-4</td><td class="number">934,000.00</td><td class="number positive">0.81%</td><td class="number">0.11%</td><td class="number positive">0.71%</td><td>zscore_exit</td></tr><tr><td>2026-05-25 12:20:00+08:00</td><td>2026-05-26 03:44:00+08:00</td><td>long_tsm_short_qff</td><td class="number">-1.97</td><td class="number">1.64</td><td class="number">924</td><td class="number">-4</td><td class="number">930,000.00</td><td class="number negative">-0.03%</td><td class="number">0.11%</td><td class="number negative">-0.14%</td><td>zscore_exit</td></tr><tr><td>2026-05-26 03:54:00+08:00</td><td>2026-05-26 04:23:00+08:00</td><td>short_tsm_long_qff</td><td class="number">1.00</td><td class="number">-1.82</td><td class="number">29</td><td class="number">4</td><td class="number">942,000.00</td><td class="number positive">0.62%</td><td class="number">0.11%</td><td class="number positive">0.51%</td><td>zscore_exit</td></tr><tr><td>2026-05-26 04:40:00+08:00</td><td>2026-05-26 04:56:00+08:00</td><td>long_tsm_short_qff</td><td class="number">-1.67</td><td class="number">1.09</td><td class="number">16</td><td class="number">-4</td><td class="number">944,000.00</td><td class="number positive">0.40%</td><td class="number">0.11%</td><td class="number positive">0.29%</td><td>zscore_exit</td></tr><tr><td>2026-05-26 08:50:00+08:00</td><td>2026-05-26 09:02:00+08:00</td><td>long_tsm_short_qff</td><td class="number">-2.66</td><td class="number">2.15</td><td class="number">12</td><td class="number">-4</td><td class="number">938,000.00</td><td class="number positive">0.57%</td><td class="number">0.11%</td><td class="number positive">0.46%</td><td>zscore_exit</td></tr><tr><td>2026-05-26 09:06:00+08:00</td><td>2026-05-26 20:15:00+08:00</td><td>short_tsm_long_qff</td><td class="number">0.78</td><td class="number">-1.23</td><td class="number">669</td><td class="number">4</td><td class="number">934,000.00</td><td class="number negative">-0.13%</td><td class="number">0.11%</td><td class="number negative">-0.24%</td><td>zscore_exit</td></tr><tr><td>2026-05-26 21:34:00+08:00</td><td>2026-05-27 02:03:00+08:00</td><td>long_tsm_short_qff</td><td class="number">-1.94</td><td class="number">1.81</td><td class="number">269</td><td class="number">-4</td><td class="number">926,000.00</td><td class="number positive">0.45%</td><td class="number">0.11%</td><td class="number positive">0.35%</td><td>zscore_exit</td></tr><tr><td>2026-05-27 05:00:00+08:00</td><td>2026-05-27 08:46:00+08:00</td><td>long_tsm_short_qff</td><td class="number">-2.05</td><td class="number">2.30</td><td class="number">226</td><td class="number">-4</td><td class="number">930,000.00</td><td class="number positive">0.74%</td><td class="number">0.11%</td><td class="number positive">0.63%</td><td>zscore_exit</td></tr><tr><td>2026-05-27 08:48:00+08:00</td><td>2026-05-27 09:04:00+08:00</td><td>short_tsm_long_qff</td><td class="number">2.26</td><td class="number">0.24</td><td class="number">16</td><td class="number">4</td><td class="number">930,000.00</td><td class="number positive">0.37%</td><td class="number">0.11%</td><td class="number positive">0.26%</td><td>zscore_exit</td></tr><tr><td>2026-05-27 09:36:00+08:00</td><td>2026-05-27 10:10:00+08:00</td><td>short_tsm_long_qff</td><td class="number">2.11</td><td class="number">-1.17</td><td class="number">34</td><td class="number">4</td><td class="number">932,000.00</td><td class="number positive">0.55%</td><td class="number">0.11%</td><td class="number positive">0.44%</td><td>zscore_exit</td></tr><tr><td>2026-05-27 10:33:00+08:00</td><td>2026-05-27 12:17:00+08:00</td><td>long_tsm_short_qff</td><td class="number">-3.18</td><td class="number">0.96</td><td class="number">104</td><td class="number">-4</td><td class="number">940,000.00</td><td class="number positive">0.51%</td><td class="number">0.11%</td><td class="number positive">0.40%</td><td>zscore_exit</td></tr><tr><td>2026-05-27 12:19:00+08:00</td><td>2026-05-27 20:33:00+08:00</td><td>short_tsm_long_qff</td><td class="number">2.08</td><td class="number">-0.99</td><td class="number">494</td><td class="number">4</td><td class="number">932,000.00</td><td class="number positive">0.48%</td><td class="number">0.11%</td><td class="number positive">0.37%</td><td>zscore_exit</td></tr><tr><td>2026-05-27 20:44:00+08:00</td><td>2026-05-28 04:48:00+08:00</td><td>long_tsm_short_qff</td><td class="number">-1.41</td><td class="number">1.24</td><td class="number">484</td><td class="number">-4</td><td class="number">970,000.00</td><td class="number negative">-0.14%</td><td class="number">0.11%</td><td class="number negative">-0.25%</td><td>zscore_exit</td></tr><tr><td>2026-05-28 09:10:00+08:00</td><td>2026-05-28 21:47:00+08:00</td><td>short_tsm_long_qff</td><td class="number">1.95</td><td class="number">-0.60</td><td class="number">757</td><td class="number">4</td><td class="number">948,000.00</td><td class="number negative">-0.01%</td><td class="number">0.11%</td><td class="number negative">-0.12%</td><td>zscore_exit</td></tr><tr><td>2026-05-28 23:29:00+08:00</td><td>2026-05-29 09:02:00+08:00</td><td>short_tsm_long_qff</td><td class="number">2.10</td><td class="number">-1.09</td><td class="number">573</td><td class="number">4</td><td class="number">948,000.00</td><td class="number positive">0.51%</td><td class="number">0.11%</td><td class="number positive">0.40%</td><td>zscore_exit</td></tr><tr><td>2026-05-29 09:42:00+08:00</td><td>2026-05-29 20:53:00+08:00</td><td>long_tsm_short_qff</td><td class="number">-2.23</td><td class="number">0.86</td><td class="number">671</td><td class="number">-4</td><td class="number">954,000.00</td><td class="number positive">0.41%</td><td class="number">0.11%</td><td class="number positive">0.30%</td><td>zscore_exit</td></tr><tr><td>2026-06-01 10:22:00+08:00</td><td>2026-06-01 13:15:00+08:00</td><td>long_tsm_short_qff</td><td class="number">-2.71</td><td class="number">0.97</td><td class="number">173</td><td class="number">-4</td><td class="number">970,000.00</td><td class="number positive">0.71%</td><td class="number">0.11%</td><td class="number positive">0.61%</td><td>zscore_exit</td></tr><tr><td>2026-06-01 13:32:00+08:00</td><td>2026-06-02 08:49:00+08:00</td><td>short_tsm_long_qff</td><td class="number">1.94</td><td class="number">-1.10</td><td class="number">1,157</td><td class="number">4</td><td class="number">960,000.00</td><td class="number negative">-1.05%</td><td class="number">0.11%</td><td class="number negative">-1.16%</td><td>zscore_exit</td></tr><tr><td>2026-06-02 13:34:00+08:00</td><td>2026-06-03 18:24:00+08:00</td><td>short_tsm_long_qff</td><td class="number">2.60</td><td class="number">-1.21</td><td class="number">1,730</td><td class="number">4</td><td class="number">964,000.00</td><td class="number negative">-0.58%</td><td class="number">0.11%</td><td class="number negative">-0.69%</td><td>zscore_exit</td></tr><tr><td>2026-06-03 21:23:00+08:00</td><td>2026-06-03 21:31:00+08:00</td><td>short_tsm_long_qff</td><td class="number">2.86</td><td class="number">-1.85</td><td class="number">8</td><td class="number">4</td><td class="number">978,000.00</td><td class="number positive">0.84%</td><td class="number">0.11%</td><td class="number positive">0.73%</td><td>zscore_exit</td></tr><tr><td>2026-06-03 21:34:00+08:00</td><td>2026-06-04 09:15:00+08:00</td><td>long_tsm_short_qff</td><td class="number">-2.64</td><td class="number">0.75</td><td class="number">701</td><td class="number">-4</td><td class="number">978,000.00</td><td class="number negative">-0.34%</td><td class="number">0.11%</td><td class="number negative">-0.44%</td><td>zscore_exit</td></tr><tr><td>2026-06-04 09:34:00+08:00</td><td>2026-06-05 09:00:00+08:00</td><td>short_tsm_long_qff</td><td class="number">1.57</td><td class="number">-1.76</td><td class="number">1,406</td><td class="number">4</td><td class="number">970,000.00</td><td class="number negative">-0.33%</td><td class="number">0.11%</td><td class="number negative">-0.44%</td><td>zscore_exit</td></tr><tr><td>2026-06-05 12:44:00+08:00</td><td>2026-06-05 21:05:00+08:00</td><td>short_tsm_long_qff</td><td class="number">1.43</td><td class="number">-0.91</td><td class="number">501</td><td class="number">4</td><td class="number">948,000.00</td><td class="number positive">0.44%</td><td class="number">0.11%</td><td class="number positive">0.33%</td><td>zscore_exit</td></tr><tr><td>2026-06-08 08:46:00+08:00</td><td>2026-06-08 13:03:00+08:00</td><td>short_tsm_long_qff</td><td class="number">2.73</td><td class="number">-0.95</td><td class="number">257</td><td class="number">5</td><td class="number">1,102,500.00</td><td class="number positive">3.46%</td><td class="number">0.11%</td><td class="number positive">3.35%</td><td>zscore_exit</td></tr><tr><td>2026-06-08 21:11:00+08:00</td><td>2026-06-08 21:41:00+08:00</td><td>long_tsm_short_qff</td><td class="number">-1.95</td><td class="number">0.67</td><td class="number">30</td><td class="number">-4</td><td class="number">934,000.00</td><td class="number positive">1.48%</td><td class="number">0.11%</td><td class="number positive">1.37%</td><td>zscore_exit</td></tr><tr><td>2026-06-08 21:43:00+08:00</td><td>2026-06-09 03:23:00+08:00</td><td>short_tsm_long_qff</td><td class="number">1.31</td><td class="number">-1.27</td><td class="number">340</td><td class="number">4</td><td class="number">938,000.00</td><td class="number positive">0.57%</td><td class="number">0.11%</td><td class="number positive">0.46%</td><td>zscore_exit</td></tr><tr><td>2026-06-09 09:47:00+08:00</td><td>2026-06-09 18:08:00+08:00</td><td>short_tsm_long_qff</td><td class="number">1.58</td><td class="number">-0.89</td><td class="number">501</td><td class="number">4</td><td class="number">920,000.00</td><td class="number positive">0.82%</td><td class="number">0.11%</td><td class="number positive">0.71%</td><td>zscore_exit</td></tr><tr><td>2026-06-09 21:31:00+08:00</td><td>2026-06-10 09:29:00+08:00</td><td>short_tsm_long_qff</td><td class="number">5.22</td><td class="number">-0.50</td><td class="number">718</td><td class="number">4</td><td class="number">932,000.00</td><td class="number positive">0.61%</td><td class="number">0.11%</td><td class="number positive">0.50%</td><td>zscore_exit</td></tr><tr><td>2026-06-10 17:26:00+08:00</td><td>2026-06-10 20:46:00+08:00</td><td>short_tsm_long_qff</td><td class="number">1.54</td><td class="number">-0.57</td><td class="number">200</td><td class="number">5</td><td class="number">1,110,000.00</td><td class="number positive">0.77%</td><td class="number">0.11%</td><td class="number positive">0.66%</td><td>zscore_exit</td></tr><tr><td>2026-06-10 21:25:00+08:00</td><td>2026-06-11 09:57:00+08:00</td><td>long_tsm_short_qff</td><td class="number">-1.51</td><td class="number">1.20</td><td class="number">752</td><td class="number">-4</td><td class="number">900,000.00</td><td class="number positive">0.21%</td><td class="number">0.11%</td><td class="number positive">0.10%</td><td>zscore_exit</td></tr><tr><td>2026-06-11 10:23:00+08:00</td><td>2026-06-11 17:31:00+08:00</td><td>short_tsm_long_qff</td><td class="number">1.93</td><td class="number">-0.71</td><td class="number">428</td><td class="number">5</td><td class="number">1,110,000.00</td><td class="number positive">1.00%</td><td class="number">0.11%</td><td class="number positive">0.89%</td><td>zscore_exit</td></tr><tr><td>2026-06-11 19:42:00+08:00</td><td>2026-06-11 22:01:00+08:00</td><td>long_tsm_short_qff</td><td class="number">-1.78</td><td class="number">1.30</td><td class="number">139</td><td class="number">-4</td><td class="number">908,000.00</td><td class="number positive">1.00%</td><td class="number">0.11%</td><td class="number positive">0.89%</td><td>zscore_exit</td></tr><tr><td>2026-06-11 22:48:00+08:00</td><td>2026-06-12 08:46:00+08:00</td><td>long_tsm_short_qff</td><td class="number">-1.43</td><td class="number">2.30</td><td class="number">598</td><td class="number">-4</td><td class="number">906,000.00</td><td class="number positive">0.98%</td><td class="number">0.11%</td><td class="number positive">0.87%</td><td>zscore_exit</td></tr><tr><td>2026-06-12 08:48:00+08:00</td><td>2026-06-12 17:32:00+08:00</td><td>short_tsm_long_qff</td><td class="number">2.21</td><td class="number">-0.44</td><td class="number">524</td><td class="number">4</td><td class="number">924,000.00</td><td class="number positive">0.61%</td><td class="number">0.11%</td><td class="number positive">0.50%</td><td>zscore_exit</td></tr><tr><td>2026-06-15 09:23:00+08:00</td><td>2026-06-15 17:26:00+08:00</td><td>short_tsm_long_qff</td><td class="number">2.08</td><td class="number">-0.19</td><td class="number">483</td><td class="number">4</td><td class="number">940,000.00</td><td class="number positive">0.53%</td><td class="number">0.11%</td><td class="number positive">0.42%</td><td>zscore_exit</td></tr><tr><td>2026-06-15 18:35:00+08:00</td><td>2026-06-16 00:58:00+08:00</td><td>long_tsm_short_qff</td><td class="number">-1.89</td><td class="number">1.26</td><td class="number">383</td><td class="number">-4</td><td class="number">958,000.00</td><td class="number positive">0.53%</td><td class="number">0.11%</td><td class="number positive">0.42%</td><td>zscore_exit</td></tr><tr><td>2026-06-16 09:01:00+08:00</td><td>2026-06-16 18:55:00+08:00</td><td>short_tsm_long_qff</td><td class="number">2.68</td><td class="number">-0.98</td><td class="number">594</td><td class="number">4</td><td class="number">950,000.00</td><td class="number positive">0.59%</td><td class="number">0.11%</td><td class="number positive">0.48%</td><td>zscore_exit</td></tr><tr><td>2026-06-16 20:48:00+08:00</td><td>2026-06-17 09:49:00+08:00</td><td>long_tsm_short_qff</td><td class="number">-1.88</td><td class="number">0.44</td><td class="number">781</td><td class="number">-4</td><td class="number">958,000.00</td><td class="number negative">-0.56%</td><td class="number">0.11%</td><td class="number negative">-0.67%</td><td>zscore_exit</td></tr><tr><td>2026-06-17 11:39:00+08:00</td><td>2026-06-17 17:26:00+08:00</td><td>short_tsm_long_qff</td><td class="number">2.03</td><td class="number">-2.37</td><td class="number">347</td><td class="number">4</td><td class="number">942,000.00</td><td class="number positive">1.89%</td><td class="number">0.11%</td><td class="number positive">1.78%</td><td>zscore_exit</td></tr><tr><td>2026-06-17 17:29:00+08:00</td><td>2026-06-18 01:37:00+08:00</td><td>long_tsm_short_qff</td><td class="number">-2.01</td><td class="number">1.20</td><td class="number">488</td><td class="number">-4</td><td class="number">968,000.00</td><td class="number positive">0.38%</td><td class="number">0.11%</td><td class="number positive">0.28%</td><td>zscore_exit</td></tr><tr><td>2026-06-18 01:54:00+08:00</td><td>2026-06-18 03:41:00+08:00</td><td>short_tsm_long_qff</td><td class="number">2.31</td><td class="number">-1.61</td><td class="number">107</td><td class="number">4</td><td class="number">978,000.00</td><td class="number positive">1.14%</td><td class="number">0.11%</td><td class="number positive">1.04%</td><td>zscore_exit</td></tr><tr><td>2026-06-18 08:48:00+08:00</td><td>2026-06-18 20:20:00+08:00</td><td>short_tsm_long_qff</td><td class="number">1.11</td><td class="number">-1.21</td><td class="number">692</td><td class="number">4</td><td class="number">976,000.00</td><td class="number positive">0.42%</td><td class="number">0.11%</td><td class="number positive">0.31%</td><td>zscore_exit</td></tr><tr><td>2026-06-22 10:03:00+08:00</td><td>2026-06-22 13:44:00+08:00</td><td>long_tsm_short_qff</td><td class="number">-1.85</td><td class="number">-1.50</td><td class="number">221</td><td class="number">-4</td><td class="number">1,018,000.00</td><td class="number negative">-0.69%</td><td class="number">0.11%</td><td class="number negative">-0.80%</td><td>end_of_data</td></tr></tbody>
+      </table>
+    </div>
+    
+      </section>
+    </section>
+  </main>
+
+  <script>
+    const equityData = {"timestamp": ["2026-05-08", "2026-05-09", "2026-05-11", "2026-05-12", "2026-05-13", "2026-05-14", "2026-05-15", "2026-05-16", "2026-05-18", "2026-05-19", "2026-05-20", "2026-05-21", "2026-05-22", "2026-05-23", "2026-05-25", "2026-05-26", "2026-05-27", "2026-05-28", "2026-05-29", "2026-05-30", "2026-06-01", "2026-06-02", "2026-06-03", "2026-06-04", "2026-06-05", "2026-06-06", "2026-06-08", "2026-06-09", "2026-06-10", "2026-06-11", "2026-06-12", "2026-06-13", "2026-06-15", "2026-06-16", "2026-06-17", "2026-06-18", "2026-06-19", "2026-06-22"], "equity": [2000000.0, 2000000.0, 2015266.883543, 2034797.230954, 2047642.065753, 2052615.404093, 2062384.518763, 2062384.518763, 2050084.629118, 2064976.101969, 2063433.782734, 2087517.787322, 2083180.323537, 2083180.323537, 2094016.302075, 2108779.795889, 2118528.188816, 2120675.950803, 2131913.980159, 2131913.980159, 2115355.475905, 2111878.704798, 2118092.020824, 2108208.115299, 2121707.327273, 2121707.327273, 2169421.637633, 2193846.375617, 2195014.162238, 2211388.381756, 2225740.3074, 2225740.3074, 2228295.498748, 2227331.999227, 2250748.983968, 2264572.957547, 2264572.957547, 2256436.700418], "runningMax": [2000000.0, 2000000.0, 2015266.883543, 2034797.230954, 2047642.065753, 2052615.404093, 2062384.518763, 2062384.518763, 2062384.518763, 2064976.101969, 2064976.101969, 2087517.787322, 2087517.787322, 2087517.787322, 2094016.302075, 2108779.795889, 2118528.188816, 2120675.950803, 2131913.980159, 2131913.980159, 2131913.980159, 2131913.980159, 2131913.980159, 2131913.980159, 2131913.980159, 2131913.980159, 2169421.637633, 2193846.375617, 2195014.162238, 2211388.381756, 2225740.3074, 2225740.3074, 2228295.498748, 2228295.498748, 2250748.983968, 2264572.957547, 2264572.957547, 2264572.957547], "drawdown": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -0.00596392, 0.0, -0.00074689, 0.0, -0.00207781, -0.00207781, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -0.00776697, -0.00939779, -0.00648336, -0.01111952, -0.00478755, -0.00478755, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -0.00043239, 0.0, 0.0, 0.0, -0.00359284]};
+    const tradeMarkers = {"winning": {"x": ["2026-05-11", "2026-05-11", "2026-05-12", "2026-05-12", "2026-05-12", "2026-05-12", "2026-05-13", "2026-05-13", "2026-05-14", "2026-05-14", "2026-05-15", "2026-05-18", "2026-05-19", "2026-05-21", "2026-05-21", "2026-05-21", "2026-05-21", "2026-05-22", "2026-05-25", "2026-05-25", "2026-05-26", "2026-05-26", "2026-05-26", "2026-05-27", "2026-05-27", "2026-05-27", "2026-05-27", "2026-05-27", "2026-05-27", "2026-05-29", "2026-05-29", "2026-06-01", "2026-06-03", "2026-06-05", "2026-06-08", "2026-06-08", "2026-06-09", "2026-06-09", "2026-06-10", "2026-06-10", "2026-06-11", "2026-06-11", "2026-06-11", "2026-06-12", "2026-06-12", "2026-06-15", "2026-06-16", "2026-06-16", "2026-06-17", "2026-06-18", "2026-06-18", "2026-06-18"], "y": [2015266.883543, 2015266.883543, 2034797.230954, 2034797.230954, 2034797.230954, 2034797.230954, 2047642.065753, 2047642.065753, 2052615.404093, 2052615.404093, 2062384.518763, 2050084.629118, 2064976.101969, 2087517.787322, 2087517.787322, 2087517.787322, 2087517.787322, 2083180.323537, 2094016.302075, 2094016.302075, 2108779.795889, 2108779.795889, 2108779.795889, 2118528.188816, 2118528.188816, 2118528.188816, 2118528.188816, 2118528.188816, 2118528.188816, 2131913.980159, 2131913.980159, 2115355.475905, 2118092.020824, 2121707.327273, 2169421.637633, 2169421.637633, 2193846.375617, 2193846.375617, 2195014.162238, 2195014.162238, 2211388.381756, 2211388.381756, 2211388.381756, 2225740.3074, 2225740.3074, 2228295.498748, 2227331.999227, 2227331.999227, 2250748.983968, 2264572.957547, 2264572.957547, 2264572.957547], "text": ["+0.65%", "+0.81%", "+0.46%", "+0.34%", "+0.67%", "+0.69%", "+0.16%", "+0.85%", "+1.08%", "+0.85%", "+0.86%", "+0.31%", "+0.66%", "+0.39%", "+0.03%", "+0.83%", "+0.82%", "+0.17%", "+0.86%", "+0.71%", "+0.51%", "+0.29%", "+0.46%", "+0.35%", "+0.63%", "+0.26%", "+0.44%", "+0.40%", "+0.37%", "+0.40%", "+0.30%", "+0.61%", "+0.73%", "+0.33%", "+3.35%", "+1.37%", "+0.46%", "+0.71%", "+0.50%", "+0.66%", "+0.10%", "+0.89%", "+0.89%", "+0.87%", "+0.50%", "+0.42%", "+0.42%", "+0.48%", "+1.78%", "+0.28%", "+1.04%", "+0.31%"]}, "losing": {"x": ["2026-05-15", "2026-05-19", "2026-05-19", "2026-05-20", "2026-05-26", "2026-05-26", "2026-05-28", "2026-05-28", "2026-06-02", "2026-06-03", "2026-06-04", "2026-06-05", "2026-06-17", "2026-06-22"], "y": [2062384.518763, 2064976.101969, 2064976.101969, 2063433.782734, 2108779.795889, 2108779.795889, 2120675.950803, 2120675.950803, 2111878.704798, 2118092.020824, 2108208.115299, 2121707.327273, 2250748.983968, 2256436.700418], "text": ["-0.77%", "-0.77%", "-0.04%", "-0.18%", "-0.14%", "-0.24%", "-0.25%", "-0.12%", "-1.16%", "-0.69%", "-0.44%", "-0.44%", "-0.67%", "-0.80%"]}};
+    const commonLayout = {
+      margin: { l: 72, r: 24, t: 12, b: 46 },
+      paper_bgcolor: "#ffffff",
+      plot_bgcolor: "#ffffff",
+      font: { family: "-apple-system, BlinkMacSystemFont, Segoe UI, Noto Sans TC, sans-serif" },
+      hovermode: "x unified",
+      xaxis: { gridcolor: "#edf0f5", rangeslider: { visible: false } },
+      yaxis: { gridcolor: "#edf0f5", tickformat: ",.0f" }
+    };
+
+    Plotly.newPlot("equity-chart", [
+      {
+        x: equityData.timestamp,
+        y: equityData.equity,
+        type: "scatter",
+        mode: "lines",
+        name: "Equity",
+        line: { color: "#2563eb", width: 2 }
+      },
+      {
+        x: equityData.timestamp,
+        y: equityData.runningMax,
+        type: "scatter",
+        mode: "lines",
+        name: "Running Max",
+        line: { color: "#94a3b8", width: 1, dash: "dot" }
+      },
+      {
+        x: tradeMarkers.winning.x,
+        y: tradeMarkers.winning.y,
+        text: tradeMarkers.winning.text,
+        type: "scatter",
+        mode: "markers",
+        name: "Winning Exit",
+        marker: { color: "#15803d", size: 7, symbol: "triangle-up" },
+        hovertemplate: "%{x}<br>%{text}<extra></extra>"
+      },
+      {
+        x: tradeMarkers.losing.x,
+        y: tradeMarkers.losing.y,
+        text: tradeMarkers.losing.text,
+        type: "scatter",
+        mode: "markers",
+        name: "Losing Exit",
+        marker: { color: "#b91c1c", size: 7, symbol: "triangle-down" },
+        hovertemplate: "%{x}<br>%{text}<extra></extra>"
+      }
+    ], {
+      ...commonLayout,
+      yaxis: { ...commonLayout.yaxis, title: "Equity (TWD)" },
+      legend: { orientation: "h", y: 1.08, x: 0 }
+    }, { responsive: true, displaylogo: false });
+
+    Plotly.newPlot("drawdown-chart", [
+      {
+        x: equityData.timestamp,
+        y: equityData.drawdown,
+        type: "scatter",
+        mode: "lines",
+        name: "Drawdown",
+        fill: "tozeroy",
+        line: { color: "#b91c1c", width: 1.5 }
+      }
+    ], {
+      ...commonLayout,
+      yaxis: {
+        ...commonLayout.yaxis,
+        title: "Drawdown (%)",
+        tickformat: ".2%"
+      },
+      showlegend: false
+    }, { responsive: true, displaylogo: false });
+  </script>
+</body>
+</html>

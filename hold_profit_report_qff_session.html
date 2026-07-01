@@ -1,0 +1,450 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hold Min vs Gross Profit %</title>
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+  <style>
+    :root {
+      --bg: #f8fafc;
+      --panel: #ffffff;
+      --ink: #0f172a;
+      --muted: #64748b;
+      --line: #d7dee8;
+      --blue: #2563eb;
+      --gold: #d97706;
+      --positive: #047857;
+      --negative: #b91c1c;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--ink);
+      background: var(--bg);
+    }
+    main {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 32px 20px 40px;
+    }
+    header {
+      margin-bottom: 22px;
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: clamp(28px, 3vw, 40px);
+      line-height: 1.1;
+      letter-spacing: 0;
+    }
+    .subtitle {
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1.5;
+      max-width: 820px;
+    }
+    .metric-grid {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+    .metric-card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px 14px 13px;
+      min-height: 104px;
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+    }
+    .metric-label {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      margin-bottom: 8px;
+    }
+    .metric-value {
+      font-size: 22px;
+      font-weight: 760;
+      line-height: 1.15;
+      letter-spacing: 0;
+      overflow-wrap: anywhere;
+    }
+    .metric-subtitle {
+      color: var(--muted);
+      margin-top: 7px;
+      font-size: 12px;
+      line-height: 1.35;
+    }
+    .metric-card.positive .metric-value { color: var(--positive); }
+    .metric-card.negative .metric-value { color: var(--negative); }
+    .chart-panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px 16px 10px;
+      margin-bottom: 18px;
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+    }
+    .stats-panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 18px;
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+    }
+    .chart-title, .section-title {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: baseline;
+      margin: 0 0 4px;
+    }
+    .chart-title h2, .section-title h2 {
+      margin: 0;
+      font-size: 18px;
+      line-height: 1.3;
+      letter-spacing: 0;
+    }
+    .chart-title span, .section-title span {
+      color: var(--muted);
+      font-size: 13px;
+      white-space: nowrap;
+    }
+    .explanation {
+      color: #334155;
+      font-size: 14px;
+      line-height: 1.55;
+      max-width: 960px;
+      margin: 8px 0 14px;
+    }
+    .note {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+      margin: 12px 0 0;
+    }
+    .table-wrap {
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+    .stats-table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 760px;
+      background: #ffffff;
+    }
+    .stats-table th, .stats-table td {
+      padding: 10px 12px;
+      border-bottom: 1px solid #e2e8f0;
+      text-align: left;
+      vertical-align: top;
+      font-size: 13px;
+      line-height: 1.35;
+    }
+    .stats-table thead th {
+      color: #334155;
+      background: #f8fafc;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .stats-table tbody tr:last-child th,
+    .stats-table tbody tr:last-child td {
+      border-bottom: 0;
+    }
+    .stats-table .number {
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+    .stats-table .positive { color: var(--positive); }
+    .stats-table .negative { color: var(--negative); }
+    .empty-cell {
+      color: var(--muted);
+      text-align: center;
+    }
+    #hold-profit-chart {
+      width: 100%;
+      height: 620px;
+    }
+    .empty-state {
+      color: var(--muted);
+      border: 1px dashed var(--line);
+      border-radius: 8px;
+      padding: 42px 16px;
+      text-align: center;
+      margin-top: 12px;
+    }
+    @media (max-width: 920px) {
+      .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      #hold-profit-chart { height: 520px; }
+    }
+    @media (max-width: 560px) {
+      main { padding: 22px 12px 30px; }
+      .metric-grid { grid-template-columns: 1fr; }
+      .chart-title, .section-title { display: block; }
+      .chart-title span, .section-title span { display: block; margin-top: 4px; white-space: normal; }
+      #hold-profit-chart { height: 460px; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Hold Min vs Gross Profit %</h1>
+      <div class="subtitle">Each point is one closed trade. Gross Profit (%) uses gross_pnl_twd / actual_leg_notional_twd.</div>
+    </header>
+
+    <section class="metric-grid">
+      
+        <div class="metric-card neutral">
+          <div class="metric-label">Trades</div>
+          <div class="metric-value">66</div>
+          <div class="metric-subtitle">Each marker is one closed trade</div>
+        </div>
+        
+
+        <div class="metric-card neutral">
+          <div class="metric-label">Average Hold</div>
+          <div class="metric-value">447.98 min</div>
+          <div class="metric-subtitle">Median 471.50 min</div>
+        </div>
+        
+
+        <div class="metric-card positive">
+          <div class="metric-label">Average Gross</div>
+          <div class="metric-value">0.51%</div>
+          <div class="metric-subtitle">Gross PnL / actual leg notional</div>
+        </div>
+        
+
+        <div class="metric-card positive">
+          <div class="metric-label">Median Gross</div>
+          <div class="metric-value">0.54%</div>
+          <div class="metric-subtitle">Middle trade by gross return</div>
+        </div>
+        
+
+        <div class="metric-card neutral">
+          <div class="metric-label">Best / Worst Gross</div>
+          <div class="metric-value">3.46% / -1.05%</div>
+          <div class="metric-subtitle">Best hold 257 min, worst hold 1,157 min</div>
+        </div>
+        
+    </section>
+
+    
+    <section class="stats-panel">
+      <div class="section-title">
+        <h2>Correlation and regression</h2>
+        <span>66 trades</span>
+      </div>
+      <p class="explanation">Primary read: Spearman rho is -0.568, a strong negative monotonic relationship, and it is statistically clear at 1%. OLS slope is -0.103 percentage points per +100 hold minutes, while R-squared is 29.40%, so Hold Min alone has limited explanatory power when this value is low.</p>
+      <div class="table-wrap">
+        <table class="stats-table">
+          <thead>
+            <tr>
+              <th>Metric</th>
+              <th>Value</th>
+              <th>p-value</th>
+              <th>How to read it</th>
+            </tr>
+          </thead>
+          <tbody>
+            
+        <tr>
+          <th>Pearson r</th>
+          <td class="number">-0.542</td>
+          <td class="number">0.0000</td>
+          <td>strong negative linear relationship.</td>
+        </tr>
+        
+
+        <tr>
+          <th>Spearman rho</th>
+          <td class="number">-0.568</td>
+          <td class="number">0.0000</td>
+          <td>strong negative monotonic relationship.</td>
+        </tr>
+        
+
+        <tr>
+          <th>Kendall tau</th>
+          <td class="number">-0.396</td>
+          <td class="number">0.0000</td>
+          <td>moderate negative rank agreement.</td>
+        </tr>
+        
+
+        <tr>
+          <th>OLS slope</th>
+          <td class="number">-0.103 pp / 100 min</td>
+          <td class="number">0.0000</td>
+          <td>Average gross return change for each additional 100 hold minutes.</td>
+        </tr>
+        
+
+        <tr>
+          <th>R-squared</th>
+          <td class="number">29.40%</td>
+          <td class="number">-</td>
+          <td>Share of gross-return variance explained by Hold Min alone.</td>
+        </tr>
+        
+          </tbody>
+        </table>
+      </div>
+      <p class="note">
+        Pearson focuses on linear fit. Spearman and Kendall use ranks and are
+        less sensitive to large outliers. p-values are two-sided approximations.
+      </p>
+    </section>
+    
+
+    <section class="chart-panel">
+      <div class="chart-title">
+        <h2>Gross profit by holding time</h2>
+        <span>66 trades</span>
+      </div>
+      
+      <div id="hold-profit-chart"></div>
+    </section>
+
+    
+    <section class="stats-panel">
+      <div class="section-title">
+        <h2>Hold Min bucket summary</h2>
+        <span>Gross Profit % by bucket</span>
+      </div>
+      <div class="table-wrap">
+        <table class="stats-table">
+          <thead>
+            <tr>
+              <th>Hold Min</th>
+              <th>Trades</th>
+              <th>Avg Hold</th>
+              <th>Mean Gross %</th>
+              <th>Median Gross %</th>
+              <th>Gross Win Rate</th>
+            </tr>
+          </thead>
+          <tbody>
+            
+                <tr>
+                  <th>0-30</th>
+                  <td class="number">9</td>
+                  <td class="number">19.00</td>
+                  <td class="number positive">0.73%</td>
+                  <td class="number positive">0.62%</td>
+                  <td class="number">100.00%</td>
+                </tr>
+                
+
+                <tr>
+                  <th>31-120</th>
+                  <td class="number">5</td>
+                  <td class="number">88.00</td>
+                  <td class="number positive">0.75%</td>
+                  <td class="number positive">0.77%</td>
+                  <td class="number">100.00%</td>
+                </tr>
+                
+
+                <tr>
+                  <th>121-480</th>
+                  <td class="number">20</td>
+                  <td class="number">288.40</td>
+                  <td class="number positive">0.87%</td>
+                  <td class="number positive">0.79%</td>
+                  <td class="number">95.00%</td>
+                </tr>
+                
+
+                <tr>
+                  <th>481+</th>
+                  <td class="number">32</td>
+                  <td class="number">724.62</td>
+                  <td class="number positive">0.19%</td>
+                  <td class="number positive">0.33%</td>
+                  <td class="number">62.50%</td>
+                </tr>
+                
+          </tbody>
+        </table>
+      </div>
+      <p class="note">
+        Buckets make the relationship easier to inspect when a few trades have
+        unusually long holding periods or unusually large returns.
+      </p>
+    </section>
+    
+  </main>
+
+  <script>
+    const plotData = [{"type": "scatter", "mode": "markers", "name": "long_tsm_short_qff", "x": [12, 16, 22, 30, 96, 104, 134, 139, 163, 173, 191, 221, 226, 269, 383, 425, 468, 475, 484, 488, 550, 559, 598, 642, 671, 678, 679, 701, 752, 781, 924], "y": [0.0056767708, 0.0040164052, 0.0044596473, 0.0147864309, 0.007702286, 0.0050863839, 0.0081352054, 0.0099566341, 0.0092868047, 0.0071402478, 0.0119159265, -0.0069113704, 0.0073671966, 0.0045433372, 0.0053262459, 0.0096599004, 0.0049867141, 0.0080205339, -0.0013950034, 0.0038404004, 0.0041859442, 0.0096061883, 0.0098442067, 0.0096072836, 0.0041241268, -0.006614536, 0.0056641777, -0.0033691951, 0.0021176213, -0.0055786065, -0.0002728781], "customdata": [["2026-05-26 08:50:00+08:00", "2026-05-26 09:02:00+08:00", "long_tsm_short_qff", 12, 0.005676770791151096, 0.004589710657354669, 0.0010870601337964285, "zscore_exit"], ["2026-05-26 04:40:00+08:00", "2026-05-26 04:56:00+08:00", "long_tsm_short_qff", 16, 0.0040164051901182786, 0.002930710546845253, 0.0010856946432730252, "zscore_exit"], ["2026-05-12 09:04:00+08:00", "2026-05-12 09:26:00+08:00", "long_tsm_short_qff", 22, 0.004459647340544151, 0.003377771499174762, 0.0010818758413693873, "zscore_exit"], ["2026-06-08 21:11:00+08:00", "2026-06-08 21:41:00+08:00", "long_tsm_short_qff", 30, 0.014786430879946308, 0.013692313895769718, 0.0010941169841765903, "zscore_exit"], ["2026-05-19 22:17:00+08:00", "2026-05-19 23:53:00+08:00", "long_tsm_short_qff", 96, 0.007702286025606824, 0.006612622525614616, 0.0010896634999922085, "zscore_exit"], ["2026-05-27 10:33:00+08:00", "2026-05-27 12:17:00+08:00", "long_tsm_short_qff", 104, 0.00508638391081265, 0.0040019258252402224, 0.0010844580855724276, "zscore_exit"], ["2026-05-25 09:36:00+08:00", "2026-05-25 11:50:00+08:00", "long_tsm_short_qff", 134, 0.008135205423417455, 0.007050838034838509, 0.0010843673885789465, "zscore_exit"], ["2026-06-11 19:42:00+08:00", "2026-06-11 22:01:00+08:00", "long_tsm_short_qff", 139, 0.009956634050314484, 0.008861347363245274, 0.0010952866870692101, "zscore_exit"], ["2026-05-21 18:48:00+08:00", "2026-05-21 21:31:00+08:00", "long_tsm_short_qff", 163, 0.009286804715813606, 0.00819327242456681, 0.0010935322912467957, "zscore_exit"], ["2026-06-01 10:22:00+08:00", "2026-06-01 13:15:00+08:00", "long_tsm_short_qff", 173, 0.007140247837396484, 0.006058327198013868, 0.0010819206393826155, "zscore_exit"], ["2026-05-13 21:38:00+08:00", "2026-05-14 00:49:00+08:00", "long_tsm_short_qff", 191, 0.01191592649084671, 0.01082531841473447, 0.0010906080761122405, "zscore_exit"], ["2026-06-22 10:03:00+08:00", "2026-06-22 13:44:00+08:00", "long_tsm_short_qff", 221, -0.006911370350704099, -0.007992394036845051, 0.0010810236861409543, "end_of_data"], ["2026-05-27 05:00:00+08:00", "2026-05-27 08:46:00+08:00", "long_tsm_short_qff", 226, 0.007367196587824761, 0.006277491484154505, 0.0010897051036702567, "zscore_exit"], ["2026-05-26 21:34:00+08:00", "2026-05-27 02:03:00+08:00", "long_tsm_short_qff", 269, 0.0045433371915405, 0.003454672434391814, 0.001088664757148686, "zscore_exit"], ["2026-06-15 18:35:00+08:00", "2026-06-16 00:58:00+08:00", "long_tsm_short_qff", 383, 0.005326245886111027, 0.004237987773606385, 0.0010882581125046423, "zscore_exit"], ["2026-05-15 10:21:00+08:00", "2026-05-15 17:26:00+08:00", "long_tsm_short_qff", 425, 0.009659900363155524, 0.008585048531135871, 0.001074851832019652, "zscore_exit"], ["2026-05-20 17:26:00+08:00", "2026-05-21 01:14:00+08:00", "long_tsm_short_qff", 468, 0.004986714068832712, 0.0038945346131435874, 0.001092179455689125, "zscore_exit"], ["2026-05-12 11:10:00+08:00", "2026-05-12 19:05:00+08:00", "long_tsm_short_qff", 475, 0.008020533904888785, 0.006941468450298371, 0.0010790654545904134, "zscore_exit"], ["2026-05-27 20:44:00+08:00", "2026-05-28 04:48:00+08:00", "long_tsm_short_qff", 484, -0.0013950034452880047, -0.002470594603359175, 0.0010755911580711706, "zscore_exit"], ["2026-06-17 17:29:00+08:00", "2026-06-18 01:37:00+08:00", "long_tsm_short_qff", 488, 0.0038404003947082985, 0.002750670277155572, 0.0010897301175527261, "zscore_exit"], ["2026-05-18 08:49:00+08:00", "2026-05-18 17:59:00+08:00", "long_tsm_short_qff", 550, 0.0041859442114167275, 0.0030917164078503446, 0.0010942278035663824, "zscore_exit"], ["2026-05-14 12:16:00+08:00", "2026-05-14 21:35:00+08:00", "long_tsm_short_qff", 559, 0.009606188314021354, 0.008510476128955252, 0.0010957121850661015, "zscore_exit"], ["2026-06-11 22:48:00+08:00", "2026-06-12 08:46:00+08:00", "long_tsm_short_qff", 598, 0.009844206711423414, 0.008742154365242097, 0.001102052346181319, "zscore_exit"], ["2026-05-13 09:50:00+08:00", "2026-05-13 20:32:00+08:00", "long_tsm_short_qff", 642, 0.009607283648897604, 0.008524004670750285, 0.0010832789781473188, "zscore_exit"], ["2026-05-29 09:42:00+08:00", "2026-05-29 20:53:00+08:00", "long_tsm_short_qff", 671, 0.004124126832866054, 0.0030350626730135627, 0.0010890641598524918, "zscore_exit"], ["2026-05-18 21:30:00+08:00", "2026-05-19 08:48:00+08:00", "long_tsm_short_qff", 678, -0.006614536015954039, -0.007686118615787472, 0.0010715825998334329, "zscore_exit"], ["2026-05-11 21:36:00+08:00", "2026-05-12 08:55:00+08:00", "long_tsm_short_qff", 679, 0.005664177682393815, 0.00457559949110273, 0.0010885781912910856, "zscore_exit"], ["2026-06-03 21:34:00+08:00", "2026-06-04 09:15:00+08:00", "long_tsm_short_qff", 701, -0.0033691951331786076, -0.004445220147063961, 0.0010760250138853534, "zscore_exit"], ["2026-06-10 21:25:00+08:00", "2026-06-11 09:57:00+08:00", "long_tsm_short_qff", 752, 0.002117621319947325, 0.0010343402870651292, 0.001083281032882196, "zscore_exit"], ["2026-06-16 20:48:00+08:00", "2026-06-17 09:49:00+08:00", "long_tsm_short_qff", 781, -0.005578606546273437, -0.006653061501872951, 0.0010744549555995147, "zscore_exit"], ["2026-05-25 12:20:00+08:00", "2026-05-26 03:44:00+08:00", "long_tsm_short_qff", 924, -0.0002728781087058001, -0.0013662900567482216, 0.0010934119480424213, "zscore_exit"]], "marker": {"size": 10, "color": "#d97706", "symbol": "diamond", "opacity": 0.82, "line": {"color": "#0f172a", "width": 0.7}}, "hovertemplate": "<b>%{customdata[2]}</b><br>Entry: %{customdata[0]}<br>Exit: %{customdata[1]}<br>Hold Min: %{x:,}<br>Gross Profit: %{y:.2%}<br>Net Profit: %{customdata[5]:.2%}<br>Fee: %{customdata[6]:.2%}<br>Exit Reason: %{customdata[7]}<extra></extra>"}, {"type": "scatter", "mode": "markers", "name": "short_tsm_long_qff", "x": [8, 13, 16, 25, 29, 34, 99, 107, 200, 241, 257, 293, 340, 347, 395, 428, 483, 494, 501, 501, 524, 573, 594, 669, 692, 718, 735, 738, 748, 757, 778, 883, 1157, 1406, 1730], "y": [0.008411876, 0.0091447811, 0.0036851206, 0.0096828716, 0.0061977291, 0.0054552011, 0.00774413, 0.0114469872, 0.0077291304, 0.0094134929, 0.0345535032, 0.0075648938, 0.0056575473, 0.0189265769, 0.0014388031, 0.0100380901, 0.0053240429, 0.0048141172, 0.0044097219, 0.0082356355, 0.0060592415, 0.0050788619, 0.0058541876, -0.0013449108, 0.0041810851, 0.0061086975, 0.0026414122, 0.0007087998, -0.0066018036, -0.0001283412, -0.0007556141, 0.0028069649, -0.0104999805, -0.0033173208, -0.0058215791], "customdata": [["2026-06-03 21:23:00+08:00", "2026-06-03 21:31:00+08:00", "short_tsm_long_qff", 8, 0.008411875993298668, 0.007334282340293272, 0.0010775936530053958, "zscore_exit"], ["2026-05-11 21:21:00+08:00", "2026-05-11 21:34:00+08:00", "short_tsm_long_qff", 13, 0.009144781089599166, 0.008060661684135096, 0.0010841194054640696, "zscore_exit"], ["2026-05-27 08:48:00+08:00", "2026-05-27 09:04:00+08:00", "short_tsm_long_qff", 16, 0.00368512055221579, 0.0025987910694811457, 0.0010863294827346448, "zscore_exit"], ["2026-05-25 08:53:00+08:00", "2026-05-25 09:18:00+08:00", "short_tsm_long_qff", 25, 0.009682871620250123, 0.008595321751712423, 0.0010875498685377011, "zscore_exit"], ["2026-05-26 03:54:00+08:00", "2026-05-26 04:23:00+08:00", "short_tsm_long_qff", 29, 0.00619772912924136, 0.005114840732659482, 0.0010828883965818764, "zscore_exit"], ["2026-05-27 09:36:00+08:00", "2026-05-27 10:10:00+08:00", "short_tsm_long_qff", 34, 0.005455201108918046, 0.00436887291548109, 0.0010863281934369571, "zscore_exit"], ["2026-05-12 09:28:00+08:00", "2026-05-12 11:07:00+08:00", "short_tsm_long_qff", 99, 0.007744129991110825, 0.006657398029260742, 0.0010867319618500823, "zscore_exit"], ["2026-06-18 01:54:00+08:00", "2026-06-18 03:41:00+08:00", "short_tsm_long_qff", 107, 0.011446987187888096, 0.010375001070030098, 0.0010719861178579988, "zscore_exit"], ["2026-06-10 17:26:00+08:00", "2026-06-10 20:46:00+08:00", "short_tsm_long_qff", 200, 0.007729130354921917, 0.00663952645163091, 0.0010896039032910075, "zscore_exit"], ["2026-05-21 13:26:00+08:00", "2026-05-21 17:27:00+08:00", "short_tsm_long_qff", 241, 0.009413492876831334, 0.008328399179810769, 0.0010850936970205644, "zscore_exit"], ["2026-06-08 08:46:00+08:00", "2026-06-08 13:03:00+08:00", "short_tsm_long_qff", 257, 0.034553503177877365, 0.033459668818355194, 0.0010938343595221724, "zscore_exit"], ["2026-05-11 13:32:00+08:00", "2026-05-11 18:25:00+08:00", "short_tsm_long_qff", 293, 0.0075648937774350266, 0.006487744960465651, 0.0010771488169693754, "zscore_exit"], ["2026-06-08 21:43:00+08:00", "2026-06-09 03:23:00+08:00", "short_tsm_long_qff", 340, 0.005657547255365332, 0.004578286476754208, 0.0010792607786111233, "zscore_exit"], ["2026-06-17 11:39:00+08:00", "2026-06-17 17:26:00+08:00", "short_tsm_long_qff", 347, 0.01892657688022997, 0.017837314054020403, 0.0010892628262095664, "zscore_exit"], ["2026-05-21 04:29:00+08:00", "2026-05-21 11:04:00+08:00", "short_tsm_long_qff", 395, 0.0014388030696090865, 0.00034992070123238703, 0.0010888823683767, "zscore_exit"], ["2026-06-11 10:23:00+08:00", "2026-06-11 17:31:00+08:00", "short_tsm_long_qff", 428, 0.010038090132796428, 0.008945136204889853, 0.001092953927906575, "zscore_exit"], ["2026-06-15 09:23:00+08:00", "2026-06-15 17:26:00+08:00", "short_tsm_long_qff", 483, 0.005324042903587504, 0.0042341517335499354, 0.001089891170037568, "zscore_exit"], ["2026-05-27 12:19:00+08:00", "2026-05-27 20:33:00+08:00", "short_tsm_long_qff", 494, 0.004814117216818102, 0.0037103010994608454, 0.0011038161173572562, "zscore_exit"], ["2026-06-05 12:44:00+08:00", "2026-06-05 21:05:00+08:00", "short_tsm_long_qff", 501, 0.004409721891518689, 0.003330703123772465, 0.0010790187677462237, "zscore_exit"], ["2026-06-09 09:47:00+08:00", "2026-06-09 18:08:00+08:00", "short_tsm_long_qff", 501, 0.00823563551018637, 0.007147362023593637, 0.0010882734865927332, "zscore_exit"], ["2026-06-12 08:48:00+08:00", "2026-06-12 17:32:00+08:00", "short_tsm_long_qff", 524, 0.0060592414656825975, 0.0049735264976708505, 0.0010857149680117474, "zscore_exit"], ["2026-05-28 23:29:00+08:00", "2026-05-29 09:02:00+08:00", "short_tsm_long_qff", 573, 0.005078861921187158, 0.003995958314173068, 0.00108290360701409, "zscore_exit"], ["2026-06-16 09:01:00+08:00", "2026-06-16 18:55:00+08:00", "short_tsm_long_qff", 594, 0.0058541876398003935, 0.004766588417830821, 0.0010875992219695734, "zscore_exit"], ["2026-05-26 09:06:00+08:00", "2026-05-26 20:15:00+08:00", "short_tsm_long_qff", 669, -0.0013449108097779972, -0.0024280243786732507, 0.001083113568895253, "zscore_exit"], ["2026-06-18 08:48:00+08:00", "2026-06-18 20:20:00+08:00", "short_tsm_long_qff", 692, 0.00418108511149366, 0.0031001838507707176, 0.0010809012607229417, "zscore_exit"], ["2026-06-09 21:31:00+08:00", "2026-06-10 09:29:00+08:00", "short_tsm_long_qff", 718, 0.006108697526526294, 0.005035571617778827, 0.0010731259087474665, "zscore_exit"], ["2026-05-12 20:48:00+08:00", "2026-05-13 09:03:00+08:00", "short_tsm_long_qff", 735, 0.002641412229462669, 0.0015625974953968134, 0.0010788147340658556, "zscore_exit"], ["2026-05-19 09:56:00+08:00", "2026-05-19 22:14:00+08:00", "short_tsm_long_qff", 738, 0.0007087998312893605, -0.0003651700931193191, 0.0010739699244086795, "zscore_exit"], ["2026-05-14 21:38:00+08:00", "2026-05-15 10:06:00+08:00", "short_tsm_long_qff", 748, -0.006601803641553584, -0.007695412913418413, 0.0010936092718648294, "zscore_exit"], ["2026-05-28 09:10:00+08:00", "2026-05-28 21:47:00+08:00", "short_tsm_long_qff", 757, -0.00012834123907901152, -0.0012064644814285088, 0.0010781232423494975, "zscore_exit"], ["2026-05-20 00:08:00+08:00", "2026-05-20 13:06:00+08:00", "short_tsm_long_qff", 778, -0.0007556141242393607, -0.0018366737494832986, 0.0010810596252439377, "zscore_exit"], ["2026-05-21 21:35:00+08:00", "2026-05-22 12:18:00+08:00", "short_tsm_long_qff", 883, 0.0028069648789670657, 0.0017163506230473474, 0.0010906142559197183, "zscore_exit"], ["2026-06-01 13:32:00+08:00", "2026-06-02 08:49:00+08:00", "short_tsm_long_qff", 1157, -0.010499980477800019, -0.011596897134705585, 0.001096916656905566, "zscore_exit"], ["2026-06-04 09:34:00+08:00", "2026-06-05 09:00:00+08:00", "short_tsm_long_qff", 1406, -0.0033173208429968103, -0.004398360946717277, 0.0010810401037204672, "zscore_exit"], ["2026-06-02 13:34:00+08:00", "2026-06-03 18:24:00+08:00", "short_tsm_long_qff", 1730, -0.00582157913454078, -0.0069157762311619925, 0.0010941970966212122, "zscore_exit"]], "marker": {"size": 10, "color": "#2563eb", "symbol": "circle", "opacity": 0.82, "line": {"color": "#0f172a", "width": 0.7}}, "hovertemplate": "<b>%{customdata[2]}</b><br>Entry: %{customdata[0]}<br>Exit: %{customdata[1]}<br>Hold Min: %{x:,}<br>Gross Profit: %{y:.2%}<br>Net Profit: %{customdata[5]:.2%}<br>Fee: %{customdata[6]:.2%}<br>Exit Reason: %{customdata[7]}<extra></extra>"}];
+    const layout = {
+      margin: { l: 72, r: 28, t: 28, b: 68 },
+      paper_bgcolor: "#ffffff",
+      plot_bgcolor: "#ffffff",
+      hovermode: "closest",
+      legend: {
+        orientation: "h",
+        y: 1.08,
+        x: 0,
+        font: { size: 12, color: "#334155" }
+      },
+      xaxis: {
+        title: { text: "Hold Min", standoff: 14 },
+        gridcolor: "#e2e8f0",
+        zeroline: false,
+        rangemode: "tozero",
+        tickformat: ",d"
+      },
+      yaxis: {
+        title: { text: "Gross Profit (%)", standoff: 16 },
+        tickformat: ".2%",
+        gridcolor: "#e2e8f0",
+        zeroline: false
+      },
+      shapes: [
+        {
+          type: "line",
+          xref: "paper",
+          x0: 0,
+          x1: 1,
+          yref: "y",
+          y0: 0,
+          y1: 0,
+          line: { color: "#475569", width: 1, dash: "dash" }
+        }
+      ],
+      annotations: [
+        {
+          xref: "paper",
+          x: 1,
+          yref: "y",
+          y: 0,
+          text: "0%",
+          showarrow: false,
+          xanchor: "left",
+          yanchor: "bottom",
+          font: { color: "#475569", size: 12 },
+          xshift: 4
+        }
+      ]
+    };
+    const config = { responsive: true, displayModeBar: true };
+    if (plotData.length) {
+      Plotly.newPlot("hold-profit-chart", plotData, layout, config);
+    } else {
+      document.getElementById("hold-profit-chart").style.display = "none";
+    }
+  </script>
+</body>
+</html>
