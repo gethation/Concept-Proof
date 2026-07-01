@@ -8,17 +8,19 @@ import pandas as pd
 
 
 TAIPEI_TZ = "Asia/Taipei"
-DEFAULT_SPREAD_PATH = Path("data/processed/qff_tsm_spread_1m_taipei.csv")
-DEFAULT_OUTPUT_PATH = Path("data/processed/qff_tsm_spread_zscore_1m_taipei.csv")
-DEFAULT_WINDOW = 1440
+DEFAULT_SPREAD_PATH = Path("data/processed/qff_tsm_spread_1m_taipei_qff_session.csv")
+DEFAULT_OUTPUT_PATH = Path(
+    "data/processed/qff_tsm_spread_zscore_1m_taipei_qff_session.csv"
+)
+DEFAULT_WINDOW = 997
 FLOAT_TOLERANCE = 1e-9
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Calculate rolling z-score for the 1m QFF-TSM spread series. "
-            "The default uses a 1440-minute rolling mean/std with ddof=0."
+            "Calculate rolling z-score for the QFF-TSM spread series. "
+            "The default uses one QFF trading day, 997 observations, with ddof=0."
         )
     )
     parser.add_argument("--spread-path", type=Path, default=DEFAULT_SPREAD_PATH)
@@ -59,15 +61,6 @@ def read_spread_frame(path: Path) -> pd.DataFrame:
     if not timestamps.is_monotonic_increasing:
         raise RuntimeError(f"{path} timestamps are not sorted")
 
-    expected_index = pd.date_range(timestamps[0], timestamps[-1], freq="min")
-    if len(timestamps) != len(expected_index) or not timestamps.equals(expected_index):
-        missing_minutes = expected_index.difference(timestamps)
-        extra_minutes = timestamps.difference(expected_index)
-        raise RuntimeError(
-            "Spread CSV is not a continuous 1m series. "
-            f"Missing={len(missing_minutes)}, extra={len(extra_minutes)}"
-        )
-
     return frame
 
 
@@ -100,9 +93,6 @@ def calculate_zscore(frame: pd.DataFrame, window: int) -> pd.DataFrame:
 
 def validate_output(frame: pd.DataFrame, window: int) -> None:
     timestamps = pd.DatetimeIndex(frame["timestamp"])
-    expected_rows = int((timestamps[-1] - timestamps[0]).total_seconds() / 60) + 1
-    if len(frame) != expected_rows:
-        raise RuntimeError(f"Expected {expected_rows} rows, got {len(frame)}")
     if not timestamps.is_unique:
         raise RuntimeError("Output timestamps are not unique")
     if not timestamps.is_monotonic_increasing:
