@@ -1,0 +1,74 @@
+{
+  "inputs": {
+    "zscore_path": "data\\processed\\qff_tsm_spread_zscore_15m_w33.csv",
+    "kappa_per_bar": 0.08086546508768122,
+    "half_life_bars": 8.571609398503751,
+    "half_life_min": 128.57414097755628,
+    "std_z": 1.2945151071375653,
+    "mean_rolling_std_spread_units": 0.41027996470413947,
+    "acf_by_lag": [
+      0.854585867536017,
+      0.770611573909935,
+      0.7124445431358614,
+      0.6573071984815037,
+      0.6058248329126581,
+      0.5630607080597236,
+      0.5204852784494403,
+      0.4796391627139894
+    ],
+    "twd_per_spread_unit": 9515.302047184541,
+    "fee_per_trade_twd": 1055.0882828961674,
+    "cost_spread_units": 0.11088332011576603,
+    "cost_z_units": 0.270262575935742,
+    "c_hat_standardised": 0.20877514248045137
+  },
+  "return_per_time_optimum": {
+    "objective": "max (a-m-c_hat)/E[T]  (one-sided OU idealisation)",
+    "a_standardised": 0.9,
+    "m_standardised": 0.0,
+    "entry_z": 1.165,
+    "exit_z": 0.0,
+    "expected_cycle_minutes": 482.5,
+    "expected_trades_per_30d": 89.5,
+    "timing_sharpe_proxy": 0.7031196107958105
+  },
+  "sharpe_analysis": {
+    "objective": "Bertram r_f=0: annualised Sharpe = sqrt(trade_frequency) / CV[T]",
+    "literal_optimum": {
+      "note": "maximises sqrt(E[T]/Var[T]); the frequency term collapses it to the smallest profitable band -> DEGENERATE, not actionable",
+      "entry_z": 0.388,
+      "exit_z": 0.0,
+      "degenerate": true
+    },
+    "robust_timing_band": {
+      "note": "minimises cycle-time CV[T] with the frequency artefact removed; the economically meaningful Sharpe target",
+      "a_standardised": 1.4,
+      "m_standardised": 0.0,
+      "entry_z": 1.812,
+      "exit_z": 0.0,
+      "cycle_cv": 0.8308,
+      "expected_cycle_minutes": 946.1
+    },
+    "mc_validation_at_robust_band": {
+      "analytic_E_T_tau": 5.1003038659629185,
+      "mc_E_T_tau": 5.0666424999999995,
+      "analytic_Var_T_tau": 17.954808460431735,
+      "mc_Var_T_tau": 17.67465979519375,
+      "rel_diff_mean": 0.006599874605032749,
+      "rel_diff_var": 0.01585030028776932,
+      "passed": true
+    }
+  },
+  "mc_validation": {
+    "analytic_E_T_tau": 2.6013931847195666,
+    "mc_E_T_tau": 2.6258714999999997,
+    "rel_diff": 0.009409694552986955,
+    "passed": true,
+    "tolerance": 0.04
+  },
+  "notes": [
+    "One-sided pure-threshold OU idealisation: every completed trade captures exactly (a-m), so risk-adjusted ranking must come from the actual backtest, not this model.",
+    "The literal r_f=0 Sharpe optimum is degenerate (smallest profitable band) because constant per-trade reward makes Sharpe ~ sqrt(frequency)/CV[T]. The robust timing band (min CV[T]) is the meaningful read and sits near the empirical backtest Sharpe peak.",
+    "The OU is assumed to hold at all deviations; empirically it breaks for |z| beyond ~3.5 (regime breaks)."
+  ]
+}
