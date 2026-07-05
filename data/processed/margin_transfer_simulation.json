@@ -1,0 +1,92 @@
+{
+  "parameters": {
+    "leg_notional_twd": 1000000.0,
+    "binance_maint_PLACEHOLDER": 0.025,
+    "fubon_maint_PLACEHOLDER": 0.1035,
+    "trigger_binance": 0.11,
+    "trigger_fubon": 0.2,
+    "decision_hour_taipei": 10,
+    "arrival_hour_taipei": 17
+  },
+  "sample": {
+    "start": "2026-03-12 00:10:00+08:00",
+    "end": "2026-06-29 19:55:00+08:00",
+    "decision_points": 74
+  },
+  "window_excursions": {
+    "tsm7": {
+      "p50": 0.00646529824175333,
+      "p90": 0.014989976538939326,
+      "p99": 0.019306468849525943,
+      "max": 0.020883557217110858
+    },
+    "tsm31": {
+      "p50": 0.027719762964202255,
+      "p90": 0.05186351580658895,
+      "p99": 0.06748871262843127,
+      "max": 0.07199530000781124
+    },
+    "qff7": {
+      "p50": 0.010277589994929863,
+      "p90": 0.01561088374966218,
+      "p99": 0.024651294377724918,
+      "max": 0.02959830866807611
+    },
+    "qff31": {
+      "p50": 0.0241226527885224,
+      "p90": 0.041410145851299165,
+      "p99": 0.07385322216256186,
+      "max": 0.08368200836820083
+    }
+  },
+  "policy_sweep": [
+    {
+      "target": 0.25,
+      "trigger_binance": 0.11,
+      "trigger_fubon": 0.2,
+      "transfers": 2,
+      "transfers_per_month": 0.5577981651376146,
+      "breach_bars_binance": 0,
+      "breach_bars_fubon": 0,
+      "min_ratio_binance": 0.103161713466559,
+      "min_ratio_fubon": 0.156816,
+      "avg_transfer_twd": 116101.79120687576
+    },
+    {
+      "target": 0.3,
+      "trigger_binance": 0.11,
+      "trigger_fubon": 0.2,
+      "transfers": 0,
+      "transfers_per_month": 0.0,
+      "breach_bars_binance": 0,
+      "breach_bars_fubon": 0,
+      "min_ratio_binance": 0.24476571346655904,
+      "min_ratio_fubon": 0.202868,
+      "avg_transfer_twd": 0.0
+    },
+    {
+      "target": 0.35,
+      "trigger_binance": 0.11,
+      "trigger_fubon": 0.2,
+      "transfers": 0,
+      "transfers_per_month": 0.0,
+      "breach_bars_binance": 0,
+      "breach_bars_fubon": 0,
+      "min_ratio_binance": 0.2947657134665591,
+      "min_ratio_fubon": 0.252868,
+      "avg_transfer_twd": 0.0
+    },
+    {
+      "target": 0.4,
+      "trigger_binance": 0.11,
+      "trigger_fubon": 0.2,
+      "transfers": 0,
+      "transfers_per_month": 0.0,
+      "breach_bars_binance": 0,
+      "breach_bars_fubon": 0,
+      "min_ratio_binance": 0.34476571346655915,
+      "min_ratio_fubon": 0.302868,
+      "avg_transfer_twd": 0.0
+    }
+  ]
+}
