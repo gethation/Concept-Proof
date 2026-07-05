@@ -23,9 +23,9 @@ DEFAULT_EQUITY_PATH = Path(
 )
 DEFAULT_TRADES_PATH = Path("data/processed/qff_tsm_pair_backtest_trades_qff_session.csv")
 DEFAULT_SUMMARY_PATH = Path("data/processed/qff_tsm_pair_backtest_summary_qff_session.json")
-FEE_DEFAULTS_AS_OF = "2026-06-17"
+FEE_DEFAULTS_AS_OF = "2026-06-30"
 DEFAULT_TSM_FEE_BPS = 5.0
-DEFAULT_QFF_FEE_PER_CONTRACT_TWD = 5.0
+DEFAULT_QFF_FEE_PER_CONTRACT_TWD = 88.0
 DEFAULT_QFF_TAX_RATE = 0.00002
 DEFAULT_QFF_CONTRACT_MULTIPLIER = 100.0
 
@@ -59,6 +59,7 @@ class BacktestParams:
     max_holding_minutes: int = 0
     entry_z_max: float = 0.0
     max_entry_vol_ratio: float = 0.0
+    max_entry_adr_share: float = 0.0
     persistence_k: int = 1
 
 
@@ -81,8 +82,8 @@ class PositionSizing:
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Backtest a simple QFF/TSM pairs strategy using next "
-            "entry-allowed-minute open fills with a maximum entry delay."
+            "Backtest a simple QFF/TSM pairs strategy using next open fills "
+            "for entries and signal-based exits."
         )
     )
     parser.add_argument("--input", type=Path, default=DEFAULT_INPUT_PATH)
@@ -111,6 +112,17 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
             "exceeds this value (EWMA spread-change vol over its trailing "
             "baseline). 0 disables the gate. Requires the entry_vol_ratio "
             "column (see scripts/add_entry_vol_ratio.py)."
+        ),
+    )
+    parser.add_argument(
+        "--max-entry-adr-share",
+        type=float,
+        default=0.0,
+        help=(
+            "Skip entries when the ADR-authorship column entry_adr_share "
+            "exceeds this value (fraction of the current z run-up explained "
+            "by the NYSE TSM ADR move). 0 disables the gate. Requires the "
+            "entry_adr_share column (see scripts/add_entry_adr_share.py)."
         ),
     )
     parser.add_argument(
@@ -284,6 +296,12 @@ def read_input_frame(
         )
     else:
         frame["entry_vol_ratio"] = 1.0
+    if "entry_adr_share" in frame.columns:
+        frame["entry_adr_share"] = pd.to_numeric(
+            frame["entry_adr_share"], errors="coerce"
+        )
+    else:
+        frame["entry_adr_share"] = np.nan
     timestamps = pd.DatetimeIndex(frame["timestamp"])
     if not timestamps.is_unique or not timestamps.is_monotonic_increasing:
         raise RuntimeError("Input timestamps must be unique and sorted")
@@ -506,6 +524,8 @@ def validate_params(params: BacktestParams) -> None:
         raise RuntimeError("entry_z_max must be greater than entry_z when set")
     if params.max_entry_vol_ratio < 0:
         raise RuntimeError("max_entry_vol_ratio must be non-negative")
+    if params.max_entry_adr_share < 0:
+        raise RuntimeError("max_entry_adr_share must be non-negative")
     if params.persistence_k < 1:
         raise RuntimeError("persistence_k must be at least 1")
     if params.tsm_fee_bps < 0:
@@ -571,6 +591,11 @@ def run_backtest(frame: pd.DataFrame, params: BacktestParams) -> BacktestResult:
         if "entry_vol_ratio" in data.columns
         else np.ones(n_rows)
     )
+    entry_adr_share = (
+        data["entry_adr_share"].to_numpy(dtype=float)
+        if "entry_adr_share" in data.columns
+        else np.full(n_rows, np.nan)
+    )
     entry_allowed = data["entry_allowed"].to_numpy(dtype=bool)
     close_allowed = data["close_allowed"].to_numpy(dtype=bool)
     friday_night = data["friday_night_close_only"].to_numpy(dtype=bool)
@@ -593,6 +618,7 @@ def run_backtest(frame: pd.DataFrame, params: BacktestParams) -> BacktestResult:
     entry_fill_idx = -1
     exit_signal_idx = -1
     exit_fill_idx = -1
+    exit_reason_pending = ""
 
     entry_tsm = np.nan
     entry_qff = np.nan
@@ -696,13 +722,14 @@ def run_backtest(frame: pd.DataFrame, params: BacktestParams) -> BacktestResult:
                 open_trade,
                 exit_idx=index,
                 exit_time=timestamps[index],
-                exit_tsm=tsm[index],
-                exit_qff=qff[index],
+                exit_tsm=tsm_entry[index],
+                exit_qff=qff_entry[index],
                 exit_zscore=zscore[index],
                 exit_signal_idx=exit_signal_idx,
                 exit_signal_time=timestamps[exit_signal_idx],
                 exit_signal_zscore=zscore[exit_signal_idx],
-                exit_reason="zscore_exit",
+                exit_reason=exit_reason_pending,
+                exit_fill_price_type="open",
                 params=params,
             )
             realized_fee_twd += trades[-1]["exit_fee_twd"]
@@ -718,6 +745,7 @@ def run_backtest(frame: pd.DataFrame, params: BacktestParams) -> BacktestResult:
             entry_zscore = np.nan
             exit_signal_idx = -1
             exit_fill_idx = -1
+            exit_reason_pending = ""
             filled_this_bar = True
 
         if (
@@ -738,6 +766,7 @@ def run_backtest(frame: pd.DataFrame, params: BacktestParams) -> BacktestResult:
                 exit_signal_time=timestamps[index],
                 exit_signal_zscore=zscore[index],
                 exit_reason=FRIDAY_SESSION_END,
+                exit_fill_price_type="close",
                 params=params,
             )
             realized_fee_twd += trades[-1]["exit_fee_twd"]
@@ -753,6 +782,7 @@ def run_backtest(frame: pd.DataFrame, params: BacktestParams) -> BacktestResult:
             entry_zscore = np.nan
             exit_signal_idx = -1
             exit_fill_idx = -1
+            exit_reason_pending = ""
             filled_this_bar = True
 
         if (
@@ -764,34 +794,12 @@ def run_backtest(frame: pd.DataFrame, params: BacktestParams) -> BacktestResult:
             and minutes_between(open_trade["entry_time"], timestamps[index])
             >= params.max_holding_minutes
         ):
-            realized_pnl += close_open_trade(
-                trades,
-                open_trade,
-                exit_idx=index,
-                exit_time=timestamps[index],
-                exit_tsm=tsm[index],
-                exit_qff=qff[index],
-                exit_zscore=zscore[index],
-                exit_signal_idx=index,
-                exit_signal_time=timestamps[index],
-                exit_signal_zscore=zscore[index],
-                exit_reason=TIME_STOP,
-                params=params,
-            )
-            realized_fee_twd += trades[-1]["exit_fee_twd"]
-            state = FLAT
-            position_direction = None
-            open_trade = None
-            tsm_units = 0.0
-            qff_units = 0.0
-            qff_contracts = 0
-            actual_leg_notional_twd = 0.0
-            entry_tsm = np.nan
-            entry_qff = np.nan
-            entry_zscore = np.nan
-            exit_signal_idx = -1
-            exit_fill_idx = -1
-            filled_this_bar = True
+            fill_idx = next_close_fill[index]
+            if fill_idx != -1:
+                exit_signal_idx = index
+                exit_fill_idx = fill_idx
+                exit_reason_pending = TIME_STOP
+                state = EXIT_PENDING
 
         if not filled_this_bar:
             if state == FLAT and entry_observation[index]:
@@ -803,6 +811,13 @@ def run_backtest(frame: pd.DataFrame, params: BacktestParams) -> BacktestResult:
                     and params.max_entry_vol_ratio > 0.0
                     and not np.isnan(entry_vol_ratio[index])
                     and entry_vol_ratio[index] > params.max_entry_vol_ratio
+                ):
+                    direction = None
+                if (
+                    direction is not None
+                    and params.max_entry_adr_share > 0.0
+                    and not np.isnan(entry_adr_share[index])
+                    and entry_adr_share[index] > params.max_entry_adr_share
                 ):
                     direction = None
                 if (
@@ -830,6 +845,7 @@ def run_backtest(frame: pd.DataFrame, params: BacktestParams) -> BacktestResult:
                     if fill_idx != -1:
                         exit_signal_idx = index
                         exit_fill_idx = fill_idx
+                        exit_reason_pending = "zscore_exit"
                         state = EXIT_PENDING
 
         unrealized = 0.0
@@ -868,6 +884,7 @@ def run_backtest(frame: pd.DataFrame, params: BacktestParams) -> BacktestResult:
                 zscore[exit_signal_idx] if exit_signal_idx != -1 else zscore[last_idx]
             ),
             exit_reason="end_of_data",
+            exit_fill_price_type="close",
             params=params,
         )
         realized_fee_twd += trades[-1]["exit_fee_twd"]
@@ -947,6 +964,7 @@ def close_open_trade(
     exit_signal_time: pd.Timestamp,
     exit_signal_zscore: float,
     exit_reason: str,
+    exit_fill_price_type: str,
     params: BacktestParams,
 ) -> float:
     tsm_pnl = open_trade["tsm_units"] * (exit_tsm - open_trade["entry_tsm_twd_fair"])
@@ -971,9 +989,16 @@ def close_open_trade(
         "exit_signal_zscore": exit_signal_zscore,
         "exit_idx": exit_idx,
         "exit_time": exit_time,
+        "exit_fill_price_type": exit_fill_price_type,
         "exit_fill_zscore": exit_zscore,
         "exit_tsm_twd_fair": exit_tsm,
+        "exit_tsm_twd_fair_open": (
+            exit_tsm if exit_fill_price_type == "open" else np.nan
+        ),
         "exit_qff_close": exit_qff,
+        "exit_qff_open_filled": (
+            exit_qff if exit_fill_price_type == "open" else np.nan
+        ),
         "tsm_pnl": tsm_pnl,
         "qff_pnl": qff_pnl,
         "gross_pnl_twd": gross_pnl,
@@ -1025,6 +1050,7 @@ def build_summary(
             "exit_z": params.exit_z,
             "max_holding_minutes": params.max_holding_minutes,
             "max_entry_vol_ratio": params.max_entry_vol_ratio,
+            "max_entry_adr_share": params.max_entry_adr_share,
             "persistence_k": params.persistence_k,
             "leg_notional_twd": params.leg_notional_twd,
             "initial_capital_twd": params.initial_capital_twd,
@@ -1034,7 +1060,8 @@ def build_summary(
             "qff_tax_rate": params.qff_tax_rate,
             "qff_contract_multiplier": params.qff_contract_multiplier,
             "entry_fill_price": "next_entry_allowed_open",
-            "exit_fill_price": "next_close_allowed_close",
+            "exit_fill_price": "signal_exit_next_close_allowed_open",
+            "forced_exit_fill_price": "close",
         },
         "rows": int(len(equity)),
         "start": format_timestamp(equity["timestamp"].iloc[0]),
@@ -1112,6 +1139,11 @@ def validate_backtest(
         if "entry_vol_ratio" in data.columns
         else np.ones(len(data))
     )
+    adr_share = (
+        data["entry_adr_share"].to_numpy(dtype=float)
+        if "entry_adr_share" in data.columns
+        else np.full(len(data), np.nan)
+    )
     entry_obs = entry_allowed & zvalid
     next_entry_fill = compute_next_indices(entry_allowed)
     next_close_fill = compute_next_indices(close_allowed)
@@ -1153,23 +1185,35 @@ def validate_backtest(
             signal_ratio = vol_ratio[entry_signal_idx]
             if not np.isnan(signal_ratio) and signal_ratio > params.max_entry_vol_ratio:
                 raise RuntimeError("Entry taken where the vol gate should have blocked it")
+        if params.max_entry_adr_share > 0:
+            signal_share = adr_share[entry_signal_idx]
+            if not np.isnan(signal_share) and signal_share > params.max_entry_adr_share:
+                raise RuntimeError(
+                    "Entry taken where the ADR-share gate should have blocked it"
+                )
         if exit_reason == "zscore_exit":
             if next_close_fill[exit_signal_idx] != exit_idx:
                 raise RuntimeError("Exit fill is not the next close-allowed minute")
             if not should_exit(zscore[exit_signal_idx], direction, params.exit_z):
                 raise RuntimeError("Exit signal z-score does not match exit rule")
+            if trade["exit_fill_price_type"] != "open":
+                raise RuntimeError("Z-score exit should fill at the next bar open")
         elif exit_reason == FRIDAY_SESSION_END:
             if exit_signal_idx != exit_idx:
                 raise RuntimeError("Friday forced exit should use the exit bar as signal")
             if not friday_session_end[exit_idx]:
                 raise RuntimeError("Friday forced exit is not at session end")
+            if trade["exit_fill_price_type"] != "close":
+                raise RuntimeError("Friday forced exit should fill at close")
         elif exit_reason == TIME_STOP:
-            if exit_signal_idx != exit_idx:
-                raise RuntimeError("Time stop should use the exit bar as the signal")
+            if next_close_fill[exit_signal_idx] != exit_idx:
+                raise RuntimeError("Time stop fill is not the next close-allowed minute")
             if not close_allowed[exit_idx]:
                 raise RuntimeError("Time stop exit is not at a close-allowed bar")
             if int(trade["holding_minutes"]) < params.max_holding_minutes:
                 raise RuntimeError("Time stop fired before max_holding_minutes")
+            if trade["exit_fill_price_type"] != "open":
+                raise RuntimeError("Time stop exit should fill at the next bar open")
         elif exit_reason != "end_of_data":
             raise RuntimeError(f"Unknown exit reason: {exit_reason}")
 
@@ -1289,8 +1333,8 @@ def run_self_tests() -> None:
         tsm_start=100.0,
         qff_start=100.0,
     )
-    open_fill["tsm_twd_fair_open"] = [100.0, 90.0, 102.0, 103.0]
-    open_fill["qff_entry_open_filled"] = [100.0, 80.0, 100.0, 100.0]
+    open_fill["tsm_twd_fair_open"] = [100.0, 90.0, 102.0, 77.0]
+    open_fill["qff_entry_open_filled"] = [100.0, 80.0, 100.0, 70.0]
     open_fill["qff_entry_open_was_filled"] = False
     open_fill_result = run_backtest(open_fill, params)
     if len(open_fill_result.trades) != 1:
@@ -1302,6 +1346,12 @@ def run_self_tests() -> None:
         raise RuntimeError("Self-test failed: entry TSM price should use open")
     if abs(open_fill_trade["entry_qff_open_filled"] - 80.0) > 1e-7:
         raise RuntimeError("Self-test failed: entry QFF price should use open")
+    if open_fill_trade["exit_fill_price_type"] != "open":
+        raise RuntimeError("Self-test failed: exit fill price type should be open")
+    if abs(open_fill_trade["exit_tsm_twd_fair"] - 77.0) > 1e-7:
+        raise RuntimeError("Self-test failed: exit TSM price should use open")
+    if abs(open_fill_trade["exit_qff_open_filled"] - 70.0) > 1e-7:
+        raise RuntimeError("Self-test failed: exit QFF price should use open")
 
     delay_times = pd.DatetimeIndex(
         [
@@ -1421,7 +1471,7 @@ def run_self_tests() -> None:
         raise RuntimeError("Self-test failed: actual notional should match rounded QFF")
     if abs(abs(fee_trade["tsm_units"]) * fee_trade["entry_tsm_twd_fair"] - 1_000_000.0) > 1e-7:
         raise RuntimeError("Self-test failed: TSM notional should match QFF notional")
-    expected_entry_fee = 500.0 + 40 * 5.0 + 40 * 1.0
+    expected_entry_fee = 500.0 + 40 * 88.0 + 40 * 1.0
     if abs(fee_trade["entry_fee_twd"] - expected_entry_fee) > 1e-7:
         raise RuntimeError("Self-test failed: entry fee calculation is wrong")
     if abs(fee_trade["gross_pnl_twd"] - fee_trade["total_fee_twd"] - fee_trade["net_pnl_twd"]) > 1e-7:
@@ -1484,8 +1534,8 @@ def run_self_tests() -> None:
         max_holding_minutes=3,
     )
     time_stop = make_synthetic_frame(
-        pd.date_range("2026-06-08 08:45", periods=5, freq="min", tz=TAIPEI_TZ),
-        zscores=[2.1, 2.1, 2.1, 2.1, 2.1],
+        pd.date_range("2026-06-08 08:45", periods=6, freq="min", tz=TAIPEI_TZ),
+        zscores=[2.1, 2.1, 2.1, 2.1, 2.1, 2.1],
         tsm_start=100.0,
         qff_start=100.0,
     )
@@ -1495,10 +1545,12 @@ def run_self_tests() -> None:
     time_stop_trade = time_stop_result.trades.iloc[0]
     if time_stop_trade["exit_reason"] != TIME_STOP:
         raise RuntimeError("Self-test failed: trade should exit via the time stop")
-    if time_stop_trade["entry_idx"] != 1 or time_stop_trade["exit_idx"] != 4:
+    if time_stop_trade["entry_idx"] != 1 or time_stop_trade["exit_idx"] != 5:
         raise RuntimeError("Self-test failed: time stop fill timing is wrong")
-    if int(time_stop_trade["holding_minutes"]) != 3:
-        raise RuntimeError("Self-test failed: time stop holding should equal the cap")
+    if time_stop_trade["exit_signal_idx"] != 4:
+        raise RuntimeError("Self-test failed: time stop signal timing is wrong")
+    if int(time_stop_trade["holding_minutes"]) != 4:
+        raise RuntimeError("Self-test failed: time stop holding should include next-open delay")
     if time_stop_result.summary["time_stop_exits"] != 1:
         raise RuntimeError("Self-test failed: summary should count the time stop exit")
     if time_stop_result.trades.iloc[0]["exit_signal_zscore"] != 2.1:
@@ -1567,6 +1619,45 @@ def run_self_tests() -> None:
     if len(run_backtest(low_vol, vol_gate_params).trades) != 1:
         raise RuntimeError("Self-test failed: normal vol ratio should allow the entry")
 
+    adr_gate_params = BacktestParams(
+        entry_z=2.0,
+        exit_z=0.0,
+        leg_notional_twd=1_000_000.0,
+        initial_capital_twd=2_000_000.0,
+        max_entry_delay_minutes=15,
+        tsm_fee_bps=DEFAULT_TSM_FEE_BPS,
+        qff_fee_per_contract_twd=DEFAULT_QFF_FEE_PER_CONTRACT_TWD,
+        qff_tax_rate=DEFAULT_QFF_TAX_RATE,
+        qff_contract_multiplier=DEFAULT_QFF_CONTRACT_MULTIPLIER,
+        max_entry_adr_share=0.5,
+    )
+    adr_blocked = make_synthetic_frame(
+        pd.date_range("2026-06-08 08:45", periods=4, freq="min", tz=TAIPEI_TZ),
+        zscores=[2.1, 2.1, -0.1, -0.2],
+        tsm_start=100.0,
+        qff_start=100.0,
+        entry_adr_share=0.8,
+    )
+    if len(run_backtest(adr_blocked, adr_gate_params).trades) != 0:
+        raise RuntimeError("Self-test failed: high ADR share should block the entry")
+    adr_allowed = make_synthetic_frame(
+        pd.date_range("2026-06-08 08:45", periods=4, freq="min", tz=TAIPEI_TZ),
+        zscores=[2.1, 2.1, -0.1, -0.2],
+        tsm_start=100.0,
+        qff_start=100.0,
+        entry_adr_share=0.2,
+    )
+    if len(run_backtest(adr_allowed, adr_gate_params).trades) != 1:
+        raise RuntimeError("Self-test failed: low ADR share should allow the entry")
+    adr_missing = make_synthetic_frame(
+        pd.date_range("2026-06-08 08:45", periods=4, freq="min", tz=TAIPEI_TZ),
+        zscores=[2.1, 2.1, -0.1, -0.2],
+        tsm_start=100.0,
+        qff_start=100.0,
+    )
+    if len(run_backtest(adr_missing, adr_gate_params).trades) != 1:
+        raise RuntimeError("Self-test failed: NaN ADR share should not block the entry")
+
     persistence_frame = make_synthetic_frame(
         pd.date_range("2026-06-08 08:45", periods=6, freq="min", tz=TAIPEI_TZ),
         zscores=[2.1, 1.0, 2.1, 2.1, 2.1, 2.1],
@@ -1609,6 +1700,7 @@ def make_synthetic_frame(
     tsm_start: float,
     qff_start: float,
     entry_vol_ratio: float | list[float] = 1.0,
+    entry_adr_share: float | list[float] = np.nan,
 ) -> pd.DataFrame:
     if len(timestamps) != len(zscores):
         raise ValueError("timestamps and zscores must have the same length")
@@ -1621,6 +1713,7 @@ def make_synthetic_frame(
             "spread_zscore": zscores,
             "zscore_valid": True,
             "entry_vol_ratio": entry_vol_ratio,
+            "entry_adr_share": entry_adr_share,
         }
     )
 
@@ -1681,6 +1774,7 @@ def main(argv: list[str]) -> int:
         max_holding_minutes=args.max_holding_minutes,
         entry_z_max=args.entry_z_max,
         max_entry_vol_ratio=args.max_entry_vol_ratio,
+        max_entry_adr_share=args.max_entry_adr_share,
         persistence_k=args.persistence_k,
     )
     frame = read_input_frame(
