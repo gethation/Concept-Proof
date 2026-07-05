@@ -91,7 +91,7 @@ Exit:
 
 - `short TSM / long QFF`：若 `z < -exit_z`，建立平倉訊號。
 - `long TSM / short QFF`：若 `z > exit_z`，建立平倉訊號。
-- 平倉在下一個 `close_allowed=True` 分鐘用 close 成交。
+- z-score 與 time-stop 平倉訊號成立後，在下一個 `close_allowed=True` 分鐘用 open 成交。
 - 若持倉進入每週最後一段可交易 session 且沒有觸發 z-score exit，會在該 session 最後一個 `close_allowed=True` 分鐘用 close 強制平倉，`exit_reason = friday_session_end`。
 - 若資料結束仍有持倉，最後一根強制平倉。
 
@@ -119,10 +119,12 @@ tsm_units = actual_leg_notional_twd / entry_tsm_twd_fair_open
 
 ```text
 tsm_fee_bps = 5.0
-qff_fee_per_contract_twd = 5.0
+qff_fee_per_contract_twd = 88.0
 qff_tax_rate = 0.00002
 qff_contract_multiplier = 100
 ```
+
+QFF 單邊手續費 88 TWD/口，來回 88×2 = 176；加上來回交易稅（每邊約 5，合計約 10），單口來回總交易成本約 88×2 + 10 = 186 TWD。
 
 手續費與交易稅都是單邊成本，entry 與 exit 各扣一次：
 
@@ -143,15 +145,17 @@ net_pnl_twd = gross_pnl_twd - total_fee_twd
 - `data/processed/qff_tsm_pair_backtest_trades_qff_session.csv`
 - `data/processed/qff_tsm_pair_backtest_summary_qff_session.json`
 
-目前預設參數的最新結果：
+目前 QFF session 預設輸出的最新結果（QFF 手續費 88/口，fee as-of 2026-06-30）：
 
 ```text
-trades = 46
-net_pnl_twd = 163,033.12
-return_pct = 8.1517%
-max_drawdown_twd = -40,183.77
+trades = 90
+net_pnl_twd = 172,453.68
+return_pct = 8.6227%
+max_drawdown_twd = -38,486.57
 qff_forward_filled_session_minutes = 6,328
-zscore_valid_rows = 28,913
+zscore_valid_rows = 29,412
 ```
+
+主力回測已改用 15m 資料（見 `qff_tsm_parameter_grid_report_15m.html`）；15m grid 最佳組態 w33 / entry 2.0 / exit 0.5 在新手續費下為 net 273,923、return 13.70%、Sharpe 6.10。
 
 大型 raw/processed CSV 資料預設不進 Git；需要重建時依序重跑下載、spread、z-score、backtest 腳本。舊的連續 1m 檔案保留，新 QFF session 補值版輸出使用 `_qff_session` 後綴。

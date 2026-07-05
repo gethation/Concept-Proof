@@ -16,29 +16,29 @@
       0.5204852784494403,
       0.4796391627139894
     ],
-    "twd_per_spread_unit": 9515.302047184541,
-    "fee_per_trade_twd": 1055.0882828961674,
-    "cost_spread_units": 0.11088332011576603,
-    "cost_z_units": 0.270262575935742,
-    "c_hat_standardised": 0.20877514248045137
+    "twd_per_spread_unit": 9511.950922025982,
+    "fee_per_trade_twd": 1808.9703802449958,
+    "cost_spread_units": 0.19017869152963388,
+    "cost_z_units": 0.463533947281036,
+    "c_hat_standardised": 0.35807534784665684
   },
   "return_per_time_optimum": {
     "objective": "max (a-m-c_hat)/E[T]  (one-sided OU idealisation)",
-    "a_standardised": 0.9,
+    "a_standardised": 1.1,
     "m_standardised": 0.0,
-    "entry_z": 1.165,
+    "entry_z": 1.424,
     "exit_z": 0.0,
-    "expected_cycle_minutes": 482.5,
-    "expected_trades_per_30d": 89.5,
-    "timing_sharpe_proxy": 0.7031196107958105
+    "expected_cycle_minutes": 636.4,
+    "expected_trades_per_30d": 67.9,
+    "timing_sharpe_proxy": 0.6368198449797069
   },
   "sharpe_analysis": {
     "objective": "Bertram r_f=0: annualised Sharpe = sqrt(trade_frequency) / CV[T]",
     "literal_optimum": {
       "note": "maximises sqrt(E[T]/Var[T]); the frequency term collapses it to the smallest profitable band -> DEGENERATE, not actionable",
-      "entry_z": 0.388,
+      "entry_z": 0.518,
       "exit_z": 0.0,
-      "degenerate": true
+      "degenerate": false
     },
     "robust_timing_band": {
       "note": "minimises cycle-time CV[T] with the frequency artefact removed; the economically meaningful Sharpe target",
@@ -60,9 +60,9 @@
     }
   },
   "mc_validation": {
-    "analytic_E_T_tau": 2.6013931847195666,
-    "mc_E_T_tau": 2.6258714999999997,
-    "rel_diff": 0.009409694552986955,
+    "analytic_E_T_tau": 3.4307015101469513,
+    "mc_E_T_tau": 3.4563260000000002,
+    "rel_diff": 0.007469169141430575,
     "passed": true,
     "tolerance": 0.04
   },
