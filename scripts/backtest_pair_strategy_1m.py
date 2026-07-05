@@ -38,6 +38,8 @@ FORCED_CLOSED = "forced_closed_end_of_data"
 FRIDAY_SESSION_CLOSED = "forced_closed_friday_session_end"
 FRIDAY_SESSION_END = "friday_session_end"
 TIME_STOP = "time_stop"
+DRIFT_BAIL = "drift_bail"
+FROZEN_MEAN_EXIT = "frozen_mean_exit"
 
 DAY_START_MINUTE = 8 * 60 + 45
 DAY_END_MINUTE = 13 * 60 + 45
@@ -62,6 +64,8 @@ class BacktestParams:
     max_entry_adr_share: float = 0.0
     max_entry_qff_vol_surprise: float = 0.0
     persistence_k: int = 1
+    drift_bail_c: float = 0.0
+    frozen_mean_exit: bool = False
 
 
 @dataclass
@@ -149,6 +153,27 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         ),
     )
     parser.add_argument("--exit-z", type=float, default=0.0)
+    parser.add_argument(
+        "--drift-bail-c",
+        type=float,
+        default=0.0,
+        help=(
+            "Exit early when the rolling spread mean has drifted toward the "
+            "position by more than this fraction of the entry-time deviation "
+            "(evidence the dislocation is a permanent level shift). 0 disables. "
+            "Requires spread / spread_mean_* columns in the input."
+        ),
+    )
+    parser.add_argument(
+        "--frozen-mean-exit",
+        action="store_true",
+        help=(
+            "Measure the exit threshold against the ENTRY-TIME spread mean and "
+            "std instead of the current rolling values (Bertram-faithful fixed "
+            "target; immune to goalpost drift). Replaces the z-score exit rule. "
+            "Requires spread / spread_mean_* / spread_std_* columns."
+        ),
+    )
     parser.add_argument("--leg-notional-twd", type=float, default=1_000_000.0)
     parser.add_argument("--initial-capital-twd", type=float, default=2_000_000.0)
     parser.add_argument("--max-entry-delay-minutes", type=int, default=15)
@@ -321,6 +346,12 @@ def read_input_frame(
         )
     else:
         frame["entry_qff_vol_surprise"] = np.nan
+    spread_stat_columns = ["spread"] + [
+        c for c in find_spread_stat_columns(list(frame.columns)) if c is not None
+    ]
+    for column in spread_stat_columns:
+        if column in frame.columns:
+            frame[column] = pd.to_numeric(frame[column], errors="coerce")
     timestamps = pd.DatetimeIndex(frame["timestamp"])
     if not timestamps.is_unique or not timestamps.is_monotonic_increasing:
         raise RuntimeError("Input timestamps must be unique and sorted")
@@ -453,6 +484,54 @@ def should_exit(zscore: float, direction: str, exit_z: float) -> bool:
     raise ValueError(f"Unknown direction: {direction}")
 
 
+def direction_sign(direction: str) -> float:
+    if direction == SHORT_TSM_LONG_QFF:
+        return 1.0
+    if direction == LONG_TSM_SHORT_QFF:
+        return -1.0
+    raise ValueError(f"Unknown direction: {direction}")
+
+
+def should_exit_frozen(
+    spread_value: float,
+    mean_ref: float,
+    std_ref: float,
+    direction: str,
+    exit_z: float,
+) -> bool:
+    """Mirror of should_exit with the threshold anchored at the entry-time
+    mean/std instead of the current rolling values."""
+    if np.isnan(spread_value) or np.isnan(mean_ref) or np.isnan(std_ref):
+        return False
+    if direction == SHORT_TSM_LONG_QFF:
+        return spread_value < mean_ref - exit_z * std_ref
+    if direction == LONG_TSM_SHORT_QFF:
+        return spread_value > mean_ref + exit_z * std_ref
+    raise ValueError(f"Unknown direction: {direction}")
+
+
+def drift_bail_triggered(
+    mean_now: float,
+    mean_ref: float,
+    dev_ref: float,
+    direction: str,
+    drift_bail_c: float,
+) -> bool:
+    """The rolling mean has chased the dislocation by more than
+    drift_bail_c x the entry-time deviation -> treat the move as a permanent
+    level shift and bail."""
+    if np.isnan(mean_now) or np.isnan(mean_ref) or np.isnan(dev_ref) or dev_ref <= 0:
+        return False
+    sgn = direction_sign(direction)
+    return sgn * (mean_now - mean_ref) > drift_bail_c * dev_ref
+
+
+def find_spread_stat_columns(columns: list[str]) -> tuple[str | None, str | None]:
+    mean_col = next((c for c in columns if c.startswith("spread_mean")), None)
+    std_col = next((c for c in columns if c.startswith("spread_std")), None)
+    return mean_col, std_col
+
+
 def compute_persistence_count(
     entry_observation: np.ndarray, zscore: np.ndarray, entry_z: float
 ) -> np.ndarray:
@@ -547,6 +626,8 @@ def validate_params(params: BacktestParams) -> None:
         raise RuntimeError("max_entry_adr_share must be non-negative")
     if params.max_entry_qff_vol_surprise < 0:
         raise RuntimeError("max_entry_qff_vol_surprise must be non-negative")
+    if params.drift_bail_c < 0:
+        raise RuntimeError("drift_bail_c must be non-negative")
     if params.persistence_k < 1:
         raise RuntimeError("persistence_k must be at least 1")
     if params.tsm_fee_bps < 0:
@@ -607,6 +688,23 @@ def run_backtest(frame: pd.DataFrame, params: BacktestParams) -> BacktestResult:
     )
     zscore = data["spread_zscore"].to_numpy(dtype=float)
     zvalid = data["zscore_valid"].to_numpy(dtype=bool)
+    # spread level / rolling stats for the frozen-mean and drift-bail exits.
+    # Fallback (spread=z, mean=0, std=1) preserves the z identity so both
+    # rules degrade gracefully when the columns are absent (synthetic frames).
+    mean_col, std_col = find_spread_stat_columns(list(data.columns))
+    spread_level = (
+        data["spread"].to_numpy(dtype=float)
+        if "spread" in data.columns
+        else zscore.copy()
+    )
+    spread_mean = (
+        data[mean_col].to_numpy(dtype=float)
+        if mean_col is not None
+        else np.zeros(n_rows)
+    )
+    spread_std = (
+        data[std_col].to_numpy(dtype=float) if std_col is not None else np.ones(n_rows)
+    )
     entry_vol_ratio = (
         data["entry_vol_ratio"].to_numpy(dtype=float)
         if "entry_vol_ratio" in data.columns
@@ -872,14 +970,38 @@ def run_backtest(frame: pd.DataFrame, params: BacktestParams) -> BacktestResult:
                         entry_fill_idx = fill_idx
 
             elif position_direction is not None and state == position_direction:
-                if close_observation[index] and should_exit(
-                    zscore[index], position_direction, params.exit_z
-                ):
+                exit_reason: str | None = None
+                if close_observation[index] and open_trade is not None:
+                    entry_ref_idx = int(open_trade["entry_signal_idx"])
+                    if params.frozen_mean_exit:
+                        if should_exit_frozen(
+                            spread_level[index],
+                            spread_mean[entry_ref_idx],
+                            spread_std[entry_ref_idx],
+                            position_direction,
+                            params.exit_z,
+                        ):
+                            exit_reason = FROZEN_MEAN_EXIT
+                    elif should_exit(zscore[index], position_direction, params.exit_z):
+                        exit_reason = "zscore_exit"
+                    if exit_reason is None and params.drift_bail_c > 0.0:
+                        dev_ref = direction_sign(position_direction) * (
+                            spread_level[entry_ref_idx] - spread_mean[entry_ref_idx]
+                        )
+                        if drift_bail_triggered(
+                            spread_mean[index],
+                            spread_mean[entry_ref_idx],
+                            dev_ref,
+                            position_direction,
+                            params.drift_bail_c,
+                        ):
+                            exit_reason = DRIFT_BAIL
+                if exit_reason is not None:
                     fill_idx = next_close_fill[index]
                     if fill_idx != -1:
                         exit_signal_idx = index
                         exit_fill_idx = fill_idx
-                        exit_reason_pending = "zscore_exit"
+                        exit_reason_pending = exit_reason
                         state = EXIT_PENDING
 
         unrealized = 0.0
@@ -1087,6 +1209,8 @@ def build_summary(
             "max_entry_adr_share": params.max_entry_adr_share,
             "max_entry_qff_vol_surprise": params.max_entry_qff_vol_surprise,
             "persistence_k": params.persistence_k,
+            "drift_bail_c": params.drift_bail_c,
+            "frozen_mean_exit": params.frozen_mean_exit,
             "leg_notional_twd": params.leg_notional_twd,
             "initial_capital_twd": params.initial_capital_twd,
             "max_entry_delay_minutes": params.max_entry_delay_minutes,
@@ -1118,6 +1242,14 @@ def build_summary(
         ),
         "time_stop_exits": (
             int((trades["exit_reason"] == TIME_STOP).sum()) if trade_count else 0
+        ),
+        "drift_bail_exits": (
+            int((trades["exit_reason"] == DRIFT_BAIL).sum()) if trade_count else 0
+        ),
+        "frozen_mean_exits": (
+            int((trades["exit_reason"] == FROZEN_MEAN_EXIT).sum())
+            if trade_count
+            else 0
         ),
         "winning_trades": wins,
         "losing_trades": int((trades["total_pnl"] < 0).sum()) if trade_count else 0,
@@ -1184,6 +1316,22 @@ def validate_backtest(
         if "entry_qff_vol_surprise" in data.columns
         else np.full(len(data), np.nan)
     )
+    audit_mean_col, audit_std_col = find_spread_stat_columns(list(data.columns))
+    audit_spread = (
+        data["spread"].to_numpy(dtype=float)
+        if "spread" in data.columns
+        else zscore.copy()
+    )
+    audit_mean = (
+        data[audit_mean_col].to_numpy(dtype=float)
+        if audit_mean_col is not None
+        else np.zeros(len(data))
+    )
+    audit_std = (
+        data[audit_std_col].to_numpy(dtype=float)
+        if audit_std_col is not None
+        else np.ones(len(data))
+    )
     entry_obs = entry_allowed & zvalid
     next_entry_fill = compute_next_indices(entry_allowed)
     next_close_fill = compute_next_indices(close_allowed)
@@ -1245,8 +1393,41 @@ def validate_backtest(
                 raise RuntimeError("Exit fill is not the next close-allowed minute")
             if not should_exit(zscore[exit_signal_idx], direction, params.exit_z):
                 raise RuntimeError("Exit signal z-score does not match exit rule")
+            if params.frozen_mean_exit:
+                raise RuntimeError(
+                    "z-score exit should not occur when frozen-mean exit is on"
+                )
             if trade["exit_fill_price_type"] != "open":
                 raise RuntimeError("Z-score exit should fill at the next bar open")
+        elif exit_reason == FROZEN_MEAN_EXIT:
+            if next_close_fill[exit_signal_idx] != exit_idx:
+                raise RuntimeError("Frozen exit fill is not the next close-allowed minute")
+            if not should_exit_frozen(
+                audit_spread[exit_signal_idx],
+                audit_mean[entry_signal_idx],
+                audit_std[entry_signal_idx],
+                direction,
+                params.exit_z,
+            ):
+                raise RuntimeError("Frozen exit fired without meeting its threshold")
+            if trade["exit_fill_price_type"] != "open":
+                raise RuntimeError("Frozen exit should fill at the next bar open")
+        elif exit_reason == DRIFT_BAIL:
+            if next_close_fill[exit_signal_idx] != exit_idx:
+                raise RuntimeError("Drift bail fill is not the next close-allowed minute")
+            bail_dev_ref = direction_sign(direction) * (
+                audit_spread[entry_signal_idx] - audit_mean[entry_signal_idx]
+            )
+            if not drift_bail_triggered(
+                audit_mean[exit_signal_idx],
+                audit_mean[entry_signal_idx],
+                bail_dev_ref,
+                direction,
+                params.drift_bail_c,
+            ):
+                raise RuntimeError("Drift bail fired without meeting its threshold")
+            if trade["exit_fill_price_type"] != "open":
+                raise RuntimeError("Drift bail should fill at the next bar open")
         elif exit_reason == FRIDAY_SESSION_END:
             if exit_signal_idx != exit_idx:
                 raise RuntimeError("Friday forced exit should use the exit bar as signal")
@@ -1746,6 +1927,77 @@ def run_self_tests() -> None:
     if len(run_backtest(qv_missing, qv_gate_params).trades) != 1:
         raise RuntimeError("Self-test failed: NaN QFF volume surprise should not block")
 
+    exit_base = dict(
+        entry_z=2.0,
+        exit_z=0.5,
+        leg_notional_twd=1_000_000.0,
+        initial_capital_twd=2_000_000.0,
+        max_entry_delay_minutes=15,
+        tsm_fee_bps=DEFAULT_TSM_FEE_BPS,
+        qff_fee_per_contract_twd=DEFAULT_QFF_FEE_PER_CONTRACT_TWD,
+        qff_tax_rate=DEFAULT_QFF_TAX_RATE,
+        qff_contract_multiplier=DEFAULT_QFF_CONTRACT_MULTIPLIER,
+    )
+    # drift bail: z never crosses the exit side, but the mean chases the
+    # dislocation past c x dev_entry at bar 3 -> bail signal there, fill bar 4
+    drift_frame = make_synthetic_frame(
+        pd.date_range("2026-06-08 08:45", periods=6, freq="min", tz=TAIPEI_TZ),
+        zscores=[2.5, 2.5, 2.5, 2.5, 2.5, 2.5],
+        tsm_start=100.0,
+        qff_start=100.0,
+        spread=[10.0, 10.0, 10.0, 10.0, 10.0, 10.0],
+        spread_mean=[8.0, 8.0, 8.0, 9.2, 9.2, 9.2],
+        spread_std=[1.0] * 6,
+    )
+    drift_result = run_backtest(
+        drift_frame, BacktestParams(**exit_base, drift_bail_c=0.5)
+    )
+    if len(drift_result.trades) != 1:
+        raise RuntimeError("Self-test failed: drift bail should produce one trade")
+    drift_trade = drift_result.trades.iloc[0]
+    if drift_trade["exit_reason"] != DRIFT_BAIL:
+        raise RuntimeError("Self-test failed: trade should exit via drift bail")
+    if drift_trade["exit_signal_idx"] != 3 or drift_trade["exit_idx"] != 4:
+        raise RuntimeError("Self-test failed: drift bail timing is wrong")
+    if drift_result.summary["drift_bail_exits"] != 1:
+        raise RuntimeError("Self-test failed: summary should count the drift bail")
+    no_drift_result = run_backtest(drift_frame, BacktestParams(**exit_base))
+    if (no_drift_result.trades["exit_reason"] == DRIFT_BAIL).any():
+        raise RuntimeError("Self-test failed: drift bail fired while disabled")
+
+    # frozen-mean exit: the current z stays high (mean drifted with the
+    # spread), but the spread crosses the ENTRY-TIME threshold
+    # mean_ref - exit_z*std_ref = 8 - 0.25 = 7.75 at bar 3 -> exit, fill bar 4
+    frozen_frame = make_synthetic_frame(
+        pd.date_range("2026-06-08 08:45", periods=6, freq="min", tz=TAIPEI_TZ),
+        zscores=[2.5, 2.5, 2.0, 2.0, 2.0, 2.0],
+        tsm_start=100.0,
+        qff_start=100.0,
+        spread=[10.0, 10.0, 8.0, 7.6, 7.6, 7.6],
+        spread_mean=[8.0, 8.0, 8.5, 9.0, 9.0, 9.0],
+        spread_std=[0.5] * 6,
+    )
+    frozen_result = run_backtest(
+        frozen_frame, BacktestParams(**exit_base, frozen_mean_exit=True)
+    )
+    if len(frozen_result.trades) != 1:
+        raise RuntimeError("Self-test failed: frozen exit should produce one trade")
+    frozen_trade = frozen_result.trades.iloc[0]
+    if frozen_trade["exit_reason"] != FROZEN_MEAN_EXIT:
+        raise RuntimeError("Self-test failed: trade should exit via frozen mean")
+    if frozen_trade["exit_signal_idx"] != 3 or frozen_trade["exit_idx"] != 4:
+        raise RuntimeError("Self-test failed: frozen exit timing is wrong")
+    if frozen_result.summary["frozen_mean_exits"] != 1:
+        raise RuntimeError("Self-test failed: summary should count the frozen exit")
+    # same frame under the normal z exit never exits (z stays at 2.0)
+    normal_result = run_backtest(frozen_frame, BacktestParams(**exit_base))
+    if (normal_result.trades["exit_reason"] == FROZEN_MEAN_EXIT).any() or (
+        normal_result.trades["exit_reason"] == "zscore_exit"
+    ).any():
+        raise RuntimeError(
+            "Self-test failed: frozen frame should not z-exit without the flag"
+        )
+
     persistence_frame = make_synthetic_frame(
         pd.date_range("2026-06-08 08:45", periods=6, freq="min", tz=TAIPEI_TZ),
         zscores=[2.1, 1.0, 2.1, 2.1, 2.1, 2.1],
@@ -1790,10 +2042,13 @@ def make_synthetic_frame(
     entry_vol_ratio: float | list[float] = 1.0,
     entry_adr_share: float | list[float] = np.nan,
     entry_qff_vol_surprise: float | list[float] = np.nan,
+    spread: list[float] | None = None,
+    spread_mean: list[float] | None = None,
+    spread_std: list[float] | None = None,
 ) -> pd.DataFrame:
     if len(timestamps) != len(zscores):
         raise ValueError("timestamps and zscores must have the same length")
-    return pd.DataFrame(
+    frame = pd.DataFrame(
         {
             "timestamp": timestamps,
             "qff_close": np.full(len(timestamps), qff_start),
@@ -1806,6 +2061,13 @@ def make_synthetic_frame(
             "entry_qff_vol_surprise": entry_qff_vol_surprise,
         }
     )
+    if spread is not None:
+        frame["spread"] = spread
+    if spread_mean is not None:
+        frame["spread_mean_33"] = spread_mean
+    if spread_std is not None:
+        frame["spread_std_33"] = spread_std
+    return frame
 
 
 def format_timestamp(timestamp: pd.Timestamp) -> str:
@@ -1866,6 +2128,8 @@ def main(argv: list[str]) -> int:
         max_entry_vol_ratio=args.max_entry_vol_ratio,
         max_entry_adr_share=args.max_entry_adr_share,
         max_entry_qff_vol_surprise=args.max_entry_qff_vol_surprise,
+        drift_bail_c=args.drift_bail_c,
+        frozen_mean_exit=args.frozen_mean_exit,
         persistence_k=args.persistence_k,
     )
     frame = read_input_frame(
