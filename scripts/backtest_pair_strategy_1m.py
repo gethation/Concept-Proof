@@ -60,6 +60,7 @@ class BacktestParams:
     entry_z_max: float = 0.0
     max_entry_vol_ratio: float = 0.0
     max_entry_adr_share: float = 0.0
+    max_entry_qff_vol_surprise: float = 0.0
     persistence_k: int = 1
 
 
@@ -123,6 +124,18 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
             "exceeds this value (fraction of the current z run-up explained "
             "by the NYSE TSM ADR move). 0 disables the gate. Requires the "
             "entry_adr_share column (see scripts/add_entry_adr_share.py)."
+        ),
+    )
+    parser.add_argument(
+        "--max-entry-qff-vol-surprise",
+        type=float,
+        default=0.0,
+        help=(
+            "Skip entries when the entry_qff_vol_surprise column (QFF bar "
+            "volume over its trailing same-slot median; day session only) "
+            "exceeds this value. 0 disables the gate. Requires the "
+            "entry_qff_vol_surprise column (see "
+            "scripts/add_entry_qff_vol_surprise.py)."
         ),
     )
     parser.add_argument(
@@ -302,6 +315,12 @@ def read_input_frame(
         )
     else:
         frame["entry_adr_share"] = np.nan
+    if "entry_qff_vol_surprise" in frame.columns:
+        frame["entry_qff_vol_surprise"] = pd.to_numeric(
+            frame["entry_qff_vol_surprise"], errors="coerce"
+        )
+    else:
+        frame["entry_qff_vol_surprise"] = np.nan
     timestamps = pd.DatetimeIndex(frame["timestamp"])
     if not timestamps.is_unique or not timestamps.is_monotonic_increasing:
         raise RuntimeError("Input timestamps must be unique and sorted")
@@ -526,6 +545,8 @@ def validate_params(params: BacktestParams) -> None:
         raise RuntimeError("max_entry_vol_ratio must be non-negative")
     if params.max_entry_adr_share < 0:
         raise RuntimeError("max_entry_adr_share must be non-negative")
+    if params.max_entry_qff_vol_surprise < 0:
+        raise RuntimeError("max_entry_qff_vol_surprise must be non-negative")
     if params.persistence_k < 1:
         raise RuntimeError("persistence_k must be at least 1")
     if params.tsm_fee_bps < 0:
@@ -594,6 +615,11 @@ def run_backtest(frame: pd.DataFrame, params: BacktestParams) -> BacktestResult:
     entry_adr_share = (
         data["entry_adr_share"].to_numpy(dtype=float)
         if "entry_adr_share" in data.columns
+        else np.full(n_rows, np.nan)
+    )
+    entry_qff_vol_surprise = (
+        data["entry_qff_vol_surprise"].to_numpy(dtype=float)
+        if "entry_qff_vol_surprise" in data.columns
         else np.full(n_rows, np.nan)
     )
     entry_allowed = data["entry_allowed"].to_numpy(dtype=bool)
@@ -818,6 +844,14 @@ def run_backtest(frame: pd.DataFrame, params: BacktestParams) -> BacktestResult:
                     and params.max_entry_adr_share > 0.0
                     and not np.isnan(entry_adr_share[index])
                     and entry_adr_share[index] > params.max_entry_adr_share
+                ):
+                    direction = None
+                if (
+                    direction is not None
+                    and params.max_entry_qff_vol_surprise > 0.0
+                    and not np.isnan(entry_qff_vol_surprise[index])
+                    and entry_qff_vol_surprise[index]
+                    > params.max_entry_qff_vol_surprise
                 ):
                     direction = None
                 if (
@@ -1051,6 +1085,7 @@ def build_summary(
             "max_holding_minutes": params.max_holding_minutes,
             "max_entry_vol_ratio": params.max_entry_vol_ratio,
             "max_entry_adr_share": params.max_entry_adr_share,
+            "max_entry_qff_vol_surprise": params.max_entry_qff_vol_surprise,
             "persistence_k": params.persistence_k,
             "leg_notional_twd": params.leg_notional_twd,
             "initial_capital_twd": params.initial_capital_twd,
@@ -1144,6 +1179,11 @@ def validate_backtest(
         if "entry_adr_share" in data.columns
         else np.full(len(data), np.nan)
     )
+    qff_vol_surprise = (
+        data["entry_qff_vol_surprise"].to_numpy(dtype=float)
+        if "entry_qff_vol_surprise" in data.columns
+        else np.full(len(data), np.nan)
+    )
     entry_obs = entry_allowed & zvalid
     next_entry_fill = compute_next_indices(entry_allowed)
     next_close_fill = compute_next_indices(close_allowed)
@@ -1190,6 +1230,15 @@ def validate_backtest(
             if not np.isnan(signal_share) and signal_share > params.max_entry_adr_share:
                 raise RuntimeError(
                     "Entry taken where the ADR-share gate should have blocked it"
+                )
+        if params.max_entry_qff_vol_surprise > 0:
+            signal_surprise = qff_vol_surprise[entry_signal_idx]
+            if (
+                not np.isnan(signal_surprise)
+                and signal_surprise > params.max_entry_qff_vol_surprise
+            ):
+                raise RuntimeError(
+                    "Entry taken where the QFF volume gate should have blocked it"
                 )
         if exit_reason == "zscore_exit":
             if next_close_fill[exit_signal_idx] != exit_idx:
@@ -1658,6 +1707,45 @@ def run_self_tests() -> None:
     if len(run_backtest(adr_missing, adr_gate_params).trades) != 1:
         raise RuntimeError("Self-test failed: NaN ADR share should not block the entry")
 
+    qv_gate_params = BacktestParams(
+        entry_z=2.0,
+        exit_z=0.0,
+        leg_notional_twd=1_000_000.0,
+        initial_capital_twd=2_000_000.0,
+        max_entry_delay_minutes=15,
+        tsm_fee_bps=DEFAULT_TSM_FEE_BPS,
+        qff_fee_per_contract_twd=DEFAULT_QFF_FEE_PER_CONTRACT_TWD,
+        qff_tax_rate=DEFAULT_QFF_TAX_RATE,
+        qff_contract_multiplier=DEFAULT_QFF_CONTRACT_MULTIPLIER,
+        max_entry_qff_vol_surprise=1.5,
+    )
+    qv_blocked = make_synthetic_frame(
+        pd.date_range("2026-06-08 08:45", periods=4, freq="min", tz=TAIPEI_TZ),
+        zscores=[2.1, 2.1, -0.1, -0.2],
+        tsm_start=100.0,
+        qff_start=100.0,
+        entry_qff_vol_surprise=2.5,
+    )
+    if len(run_backtest(qv_blocked, qv_gate_params).trades) != 0:
+        raise RuntimeError("Self-test failed: high QFF volume should block the entry")
+    qv_allowed = make_synthetic_frame(
+        pd.date_range("2026-06-08 08:45", periods=4, freq="min", tz=TAIPEI_TZ),
+        zscores=[2.1, 2.1, -0.1, -0.2],
+        tsm_start=100.0,
+        qff_start=100.0,
+        entry_qff_vol_surprise=0.7,
+    )
+    if len(run_backtest(qv_allowed, qv_gate_params).trades) != 1:
+        raise RuntimeError("Self-test failed: thin QFF volume should allow the entry")
+    qv_missing = make_synthetic_frame(
+        pd.date_range("2026-06-08 08:45", periods=4, freq="min", tz=TAIPEI_TZ),
+        zscores=[2.1, 2.1, -0.1, -0.2],
+        tsm_start=100.0,
+        qff_start=100.0,
+    )
+    if len(run_backtest(qv_missing, qv_gate_params).trades) != 1:
+        raise RuntimeError("Self-test failed: NaN QFF volume surprise should not block")
+
     persistence_frame = make_synthetic_frame(
         pd.date_range("2026-06-08 08:45", periods=6, freq="min", tz=TAIPEI_TZ),
         zscores=[2.1, 1.0, 2.1, 2.1, 2.1, 2.1],
@@ -1701,6 +1789,7 @@ def make_synthetic_frame(
     qff_start: float,
     entry_vol_ratio: float | list[float] = 1.0,
     entry_adr_share: float | list[float] = np.nan,
+    entry_qff_vol_surprise: float | list[float] = np.nan,
 ) -> pd.DataFrame:
     if len(timestamps) != len(zscores):
         raise ValueError("timestamps and zscores must have the same length")
@@ -1714,6 +1803,7 @@ def make_synthetic_frame(
             "zscore_valid": True,
             "entry_vol_ratio": entry_vol_ratio,
             "entry_adr_share": entry_adr_share,
+            "entry_qff_vol_surprise": entry_qff_vol_surprise,
         }
     )
 
@@ -1775,6 +1865,7 @@ def main(argv: list[str]) -> int:
         entry_z_max=args.entry_z_max,
         max_entry_vol_ratio=args.max_entry_vol_ratio,
         max_entry_adr_share=args.max_entry_adr_share,
+        max_entry_qff_vol_surprise=args.max_entry_qff_vol_surprise,
         persistence_k=args.persistence_k,
     )
     frame = read_input_frame(
