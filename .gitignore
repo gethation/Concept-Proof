@@ -1,5 +1,6 @@
 data/raw/
 data/processed/*.csv
+tmp/
 
 __pycache__/
 .pytest_cache/
