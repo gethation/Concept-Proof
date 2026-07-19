@@ -26,6 +26,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--spread-path", type=Path, default=DEFAULT_SPREAD_PATH)
     parser.add_argument("--out", type=Path, default=DEFAULT_OUTPUT_PATH)
     parser.add_argument("--window", type=int, default=DEFAULT_WINDOW)
+    parser.add_argument(
+        "--seed-spread-path",
+        type=Path,
+        default=None,
+        help=(
+            "Optional spread CSV whose rows are prepended (rolling-stat warmup "
+            "only) and then dropped from the output, so every output row has a "
+            "full window. Seed timestamps must all precede the main series."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -64,22 +74,39 @@ def read_spread_frame(path: Path) -> pd.DataFrame:
     return frame
 
 
-def calculate_zscore(frame: pd.DataFrame, window: int) -> pd.DataFrame:
+def calculate_zscore(
+    frame: pd.DataFrame, window: int, seed_frame: pd.DataFrame | None = None
+) -> pd.DataFrame:
     if window <= 1:
         raise ValueError("--window must be greater than 1")
-    if len(frame) < window:
+    if seed_frame is None and len(frame) < window:
         raise ValueError(
             f"Not enough rows for window={window}: input has only {len(frame)} rows"
         )
 
     output = frame.copy()
-    spread = output["spread"]
-    rolling = spread.rolling(window=window, min_periods=window)
     mean_col = f"spread_mean_{window}"
     std_col = f"spread_std_{window}"
 
-    output[mean_col] = rolling.mean()
-    output[std_col] = rolling.std(ddof=0)
+    if seed_frame is None:
+        spread = output["spread"]
+        rolling = spread.rolling(window=window, min_periods=window)
+        output[mean_col] = rolling.mean()
+        output[std_col] = rolling.std(ddof=0)
+    else:
+        if len(seed_frame) < window - 1:
+            raise ValueError(
+                f"Seed has only {len(seed_frame)} rows; window={window} needs "
+                f"at least {window - 1} so every output row has a full window"
+            )
+        if seed_frame["timestamp"].iloc[-1] >= output["timestamp"].iloc[0]:
+            raise ValueError("Seed timestamps must all precede the main series")
+        combined = pd.concat(
+            [seed_frame["spread"], output["spread"]], ignore_index=True
+        )
+        rolling = combined.rolling(window=window, min_periods=window)
+        output[mean_col] = rolling.mean().tail(len(output)).to_numpy()
+        output[std_col] = rolling.std(ddof=0).tail(len(output)).to_numpy()
     valid = output[mean_col].notna() & output[std_col].notna() & (output[std_col] != 0)
     output["spread_zscore"] = pd.NA
     output.loc[valid, "spread_zscore"] = (
@@ -91,7 +118,9 @@ def calculate_zscore(frame: pd.DataFrame, window: int) -> pd.DataFrame:
     return output
 
 
-def validate_output(frame: pd.DataFrame, window: int) -> None:
+def validate_output(
+    frame: pd.DataFrame, window: int, seed_frame: pd.DataFrame | None = None
+) -> None:
     timestamps = pd.DatetimeIndex(frame["timestamp"])
     if not timestamps.is_unique:
         raise RuntimeError("Output timestamps are not unique")
@@ -103,7 +132,7 @@ def validate_output(frame: pd.DataFrame, window: int) -> None:
 
     mean_col = f"spread_mean_{window}"
     std_col = f"spread_std_{window}"
-    expected_warmup = window - 1
+    expected_warmup = window - 1 if seed_frame is None else 0
     warmup = frame.iloc[:expected_warmup]
     if warmup["zscore_valid"].any() or warmup["spread_zscore"].notna().any():
         raise RuntimeError("Warmup rows should not have valid z-score values")
@@ -123,14 +152,24 @@ def validate_output(frame: pd.DataFrame, window: int) -> None:
     if valid_rows[["spread_zscore", mean_col, std_col]].isna().any().any():
         raise RuntimeError("Valid z-score rows contain missing z-score inputs")
 
-    sample_positions = sorted({window - 1, len(frame) // 2, len(frame) - 1})
-    spread = frame["spread"]
+    sample_positions = sorted({expected_warmup, len(frame) // 2, len(frame) - 1})
+    if seed_frame is None:
+        spread = frame["spread"]
+        offset = 0
+    else:
+        spread = pd.concat(
+            [seed_frame["spread"], frame["spread"]], ignore_index=True
+        )
+        offset = len(seed_frame)
     for position in sample_positions:
-        window_values = spread.iloc[position - window + 1 : position + 1]
+        combined_position = position + offset
+        window_values = spread.iloc[
+            combined_position - window + 1 : combined_position + 1
+        ]
         expected_mean = window_values.mean()
         expected_std = window_values.std(ddof=0)
         expected_zscore = (
-            (spread.iloc[position] - expected_mean) / expected_std
+            (spread.iloc[combined_position] - expected_mean) / expected_std
             if expected_std != 0
             else pd.NA
         )
@@ -156,12 +195,14 @@ def write_csv(frame: pd.DataFrame, output_path: Path) -> None:
     output.to_csv(output_path, index=False)
 
 
-def print_summary(frame: pd.DataFrame, window: int, output_path: Path) -> None:
+def print_summary(
+    frame: pd.DataFrame, window: int, output_path: Path, seeded: bool = False
+) -> None:
     valid = frame.loc[frame["zscore_valid"], "spread_zscore"]
     print(f"Wrote {len(frame):,} rows to {output_path}")
     print(f"Window: {window} minutes")
     print(f"Valid z-score rows: {len(valid):,}")
-    print(f"Warmup rows: {window - 1:,}")
+    print(f"Warmup rows: {0 if seeded else window - 1:,}")
     print(
         "Z-score summary: "
         f"mean={valid.mean():.6f}, "
@@ -175,10 +216,21 @@ def print_summary(frame: pd.DataFrame, window: int, output_path: Path) -> None:
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
     frame = read_spread_frame(args.spread_path)
-    output = calculate_zscore(frame, args.window)
-    validate_output(output, args.window)
+    seed_frame = (
+        read_spread_frame(args.seed_spread_path)
+        if args.seed_spread_path is not None
+        else None
+    )
+    output = calculate_zscore(frame, args.window, seed_frame=seed_frame)
+    validate_output(output, args.window, seed_frame=seed_frame)
     write_csv(output, args.out)
-    print_summary(output, args.window, args.out)
+    print_summary(output, args.window, args.out, seeded=seed_frame is not None)
+    if seed_frame is not None:
+        print(
+            f"Seeded with {len(seed_frame):,} rows "
+            f"({seed_frame['timestamp'].iloc[0]} -> "
+            f"{seed_frame['timestamp'].iloc[-1]}); no warmup rows in output"
+        )
     return 0
 
 

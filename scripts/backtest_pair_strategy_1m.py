@@ -375,7 +375,36 @@ def parse_bool_series(series: pd.Series) -> pd.Series:
     return normalized.isin(["true", "1", "yes"])
 
 
+PRECOMPUTED_MASK_COLUMNS = [
+    "close_allowed",
+    "entry_allowed",
+    "friday_night_close_only",
+    "weekend_session_close_only",
+    "friday_session_end_force_close",
+]
+
+
 def add_trading_masks(frame: pd.DataFrame) -> pd.DataFrame:
+    # Inputs may carry precomputed session masks (e.g. the CCF-UMC pair whose
+    # session is NYSE:UMC's RTH, not the QFF clock below). When all mask
+    # columns are present they are used verbatim; QFF-session inputs do not
+    # have them, so the legacy clock-derived path is unchanged.
+    if all(column in frame.columns for column in PRECOMPUTED_MASK_COLUMNS):
+        output = frame.copy()
+        for column in PRECOMPUTED_MASK_COLUMNS:
+            output[column] = parse_bool_series(output[column])
+        if (output["entry_allowed"] & ~output["close_allowed"]).any():
+            raise RuntimeError(
+                "Precomputed masks invalid: entry_allowed outside close_allowed"
+            )
+        if (
+            output["friday_session_end_force_close"] & ~output["close_allowed"]
+        ).any():
+            raise RuntimeError(
+                "Precomputed masks invalid: force-close bar outside close_allowed"
+            )
+        return output
+
     output = frame.copy()
     ts = pd.DatetimeIndex(output["timestamp"])
     minute = ts.hour * 60 + ts.minute
@@ -2031,6 +2060,44 @@ def run_self_tests() -> None:
     if no_persistence_result.trades.iloc[0]["entry_idx"] != 1:
         raise RuntimeError(
             "Self-test failed: persistence k=1 should enter on the first signal"
+        )
+
+    # precomputed-mask passthrough: timestamps sit OUTSIDE every QFF session
+    # window (06:00 Taipei), so the legacy clock path would allow nothing;
+    # with mask columns supplied the engine must trade and must honor a
+    # close-only tail.
+    masked_times = pd.date_range(
+        "2026-06-10 06:00", periods=6, freq="min", tz=TAIPEI_TZ
+    )
+    masked = make_synthetic_frame(
+        masked_times,
+        zscores=[2.1, 2.2, -0.1, 2.5, 2.6, 2.4],
+        tsm_start=100.0,
+        qff_start=100.0,
+    )
+    unmasked_result = run_backtest(masked, params)
+    if len(unmasked_result.trades) != 0:
+        raise RuntimeError(
+            "Self-test failed: off-session bars without masks should not trade"
+        )
+    masked["close_allowed"] = True
+    masked["entry_allowed"] = [True, True, True, False, False, False]
+    masked["friday_night_close_only"] = False
+    masked["weekend_session_close_only"] = [False, False, False, True, True, True]
+    masked["friday_session_end_force_close"] = [False] * 5 + [True]
+    masked_result = run_backtest(masked, params)
+    if len(masked_result.trades) != 1:
+        raise RuntimeError(
+            "Self-test failed: precomputed masks should allow exactly one trade"
+        )
+    masked_trade = masked_result.trades.iloc[0]
+    if masked_trade["entry_idx"] != 1 or masked_trade["exit_idx"] != 3:
+        raise RuntimeError(
+            "Self-test failed: precomputed-mask trade timing is wrong"
+        )
+    if masked_result.equity["entry_allowed"].iloc[3:].any():
+        raise RuntimeError(
+            "Self-test failed: close-only tail should block entries"
         )
 
 

@@ -108,6 +108,21 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         default=DEFAULT_MIN_SHARPE_TRADES,
         help="Minimum trade count for inclusion in Sharpe primary ranking.",
     )
+    parser.add_argument(
+        "--title",
+        default="QFF-TSM Parameter Grid",
+        help="Report page title (e.g. \"CCF-UMC Parameter Grid (5m)\").",
+    )
+    parser.add_argument(
+        "--seed-spread-path",
+        type=Path,
+        default=None,
+        help=(
+            "Optional spread CSV prepended for rolling-stat warmup only (see "
+            "calculate_spread_zscore_1m.py --seed-spread-path); removes the "
+            "per-window warmup so all windows trade the same period."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -241,12 +256,17 @@ def run_grid(args: argparse.Namespace) -> pd.DataFrame:
         raise RuntimeError("--min-sharpe-trades must be non-negative")
 
     spread = zscore_calc.read_spread_frame(args.spread_path)
+    seed_frame = (
+        zscore_calc.read_spread_frame(args.seed_spread_path)
+        if args.seed_spread_path is not None
+        else None
+    )
     rows: list[dict[str, Any]] = []
     total = len(args.windows) * len(args.entry_z) * len(args.exit_z)
     completed = 0
 
     for window in args.windows:
-        zframe = zscore_calc.calculate_zscore(spread, window)
+        zframe = zscore_calc.calculate_zscore(spread, window, seed_frame=seed_frame)
         zscore_valid_rows = int(zframe["zscore_valid"].sum())
         backtest_frame = backtest.add_entry_open_prices(
             zframe,
@@ -477,6 +497,7 @@ def make_report(
     elapsed_seconds: float,
     min_sharpe_trades: int,
     annual_trading_days: float,
+    title: str = "QFF-TSM Parameter Grid",
 ) -> str:
     best = frame.iloc[0]
     eligible_count = int(frame["sharpe_rank_eligible"].sum())
@@ -486,7 +507,7 @@ def make_report(
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>QFF-TSM Parameter Grid</title>
+  <title>{html.escape(title)}</title>
   <style>
     :root {{
       color-scheme: light;
@@ -534,7 +555,7 @@ def make_report(
 </head>
 <body>
 <main>
-  <h1>QFF-TSM Parameter Grid</h1>
+  <h1>{html.escape(title)}</h1>
   <div class="subtitle">Generated {generated_at}. Ranked by daily-equity Sharpe ratio. Annualized with {annual_trading_days:g} trading days; Sharpe rank requires net PnL &gt; 0 and at least {min_sharpe_trades} trades. Runtime {elapsed_seconds:.2f}s.</div>
   <section class="cards">
     <div class="card">
@@ -591,6 +612,7 @@ def write_report(
     elapsed_seconds: float,
     min_sharpe_trades: int,
     annual_trading_days: float,
+    title: str = "QFF-TSM Parameter Grid",
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -599,6 +621,7 @@ def write_report(
             elapsed_seconds,
             min_sharpe_trades=min_sharpe_trades,
             annual_trading_days=annual_trading_days,
+            title=title,
         ),
         encoding="utf-8",
     )
@@ -617,6 +640,7 @@ def main(argv: list[str]) -> int:
         elapsed_seconds,
         min_sharpe_trades=args.min_sharpe_trades,
         annual_trading_days=args.annual_trading_days,
+        title=args.title,
     )
 
     best = frame.iloc[0]
