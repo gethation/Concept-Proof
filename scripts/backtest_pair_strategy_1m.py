@@ -66,6 +66,17 @@ class BacktestParams:
     persistence_k: int = 1
     drift_bail_c: float = 0.0
     frozen_mean_exit: bool = False
+    # When > 0 every entry is exactly this many futures contracts and
+    # leg_notional_twd is ignored. Live trades a fixed lot count, so a notional
+    # backtest sizes differently from what is actually sent: 1,000,000 TWD is
+    # about 3 CCF contracts or 9 QFF. Fees that are flat per contract scale
+    # linearly and cancel out, but any per-order minimum does not -- it is a
+    # fixed cost spread over a smaller position.
+    qff_lots: int = 0
+    # When > 0 the QFF/CCF-leg commission is charged as bps of contract
+    # notional instead of the flat per-contract rate (brokers quote stock
+    # futures either way). 0 keeps the flat per-contract schedule.
+    qff_fee_bps: float = 0.0
 
 
 @dataclass
@@ -175,6 +186,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         ),
     )
     parser.add_argument("--leg-notional-twd", type=float, default=1_000_000.0)
+    parser.add_argument(
+        "--qff-lots",
+        type=int,
+        default=0,
+        help=(
+            "Trade exactly this many futures contracts per entry, ignoring "
+            "--leg-notional-twd. 0 keeps notional sizing. Live runs a fixed lot "
+            "count, so this is what reproduces the real position scale."
+        ),
+    )
     parser.add_argument("--initial-capital-twd", type=float, default=2_000_000.0)
     parser.add_argument("--max-entry-delay-minutes", type=int, default=15)
     parser.add_argument(
@@ -202,6 +223,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help=(
             "QFF one-way fixed fee in TWD per contract. Default is TAIFEX "
             "single stock futures transaction plus clearing baseline."
+        ),
+    )
+    parser.add_argument(
+        "--qff-fee-bps",
+        type=float,
+        default=0.0,
+        help=(
+            "Charge the QFF/CCF-leg commission as bps of contract notional "
+            "instead of the flat per-contract rate. 0 (default) keeps the "
+            "flat --qff-fee-per-contract-twd schedule."
         ),
     )
     parser.add_argument(
@@ -601,10 +632,16 @@ def round_half_up_nonnegative(value: float) -> int:
 def size_position_for_direction(
     direction: str, tsm_price: float, qff_price: float, params: BacktestParams
 ) -> PositionSizing | None:
-    raw_qff_contracts = params.leg_notional_twd / (
-        qff_price * params.qff_contract_multiplier
-    )
-    qff_contract_count = round_half_up_nonnegative(raw_qff_contracts)
+    if params.qff_lots > 0:
+        # Fixed-lot mode: the contract count is the input, and the notional is
+        # whatever that many contracts happen to be worth at this price.
+        qff_contract_count = int(params.qff_lots)
+        raw_qff_contracts = float(qff_contract_count)
+    else:
+        raw_qff_contracts = params.leg_notional_twd / (
+            qff_price * params.qff_contract_multiplier
+        )
+        qff_contract_count = round_half_up_nonnegative(raw_qff_contracts)
     if qff_contract_count == 0:
         return None
 
@@ -663,6 +700,8 @@ def validate_params(params: BacktestParams) -> None:
         raise RuntimeError("tsm_fee_bps must be non-negative")
     if params.qff_fee_per_contract_twd < 0:
         raise RuntimeError("qff_fee_per_contract_twd must be non-negative")
+    if params.qff_fee_bps < 0:
+        raise RuntimeError("qff_fee_bps must be non-negative")
     if params.qff_tax_rate < 0:
         raise RuntimeError("qff_tax_rate must be non-negative")
     if params.qff_contract_multiplier <= 0:
@@ -678,7 +717,16 @@ def fill_costs(
     params: BacktestParams,
 ) -> dict[str, float]:
     tsm_fee_twd = abs(tsm_units) * tsm_price * params.tsm_fee_bps / 10000.0
-    qff_fee_twd = abs(qff_contracts) * params.qff_fee_per_contract_twd
+    if params.qff_fee_bps > 0.0:
+        qff_fee_twd = (
+            abs(qff_contracts)
+            * qff_price
+            * params.qff_contract_multiplier
+            * params.qff_fee_bps
+            / 10000.0
+        )
+    else:
+        qff_fee_twd = abs(qff_contracts) * params.qff_fee_per_contract_twd
     qff_tax_per_contract_twd = round_half_up_nonnegative(
         qff_price * params.qff_contract_multiplier * params.qff_tax_rate
     )
@@ -1245,6 +1293,7 @@ def build_summary(
             "max_entry_delay_minutes": params.max_entry_delay_minutes,
             "tsm_fee_bps": params.tsm_fee_bps,
             "qff_fee_per_contract_twd": params.qff_fee_per_contract_twd,
+            "qff_fee_bps": params.qff_fee_bps,
             "qff_tax_rate": params.qff_tax_rate,
             "qff_contract_multiplier": params.qff_contract_multiplier,
             "entry_fill_price": "next_entry_allowed_open",
@@ -1476,10 +1525,13 @@ def validate_backtest(
         elif exit_reason != "end_of_data":
             raise RuntimeError(f"Unknown exit reason: {exit_reason}")
 
-        expected_contracts = round_half_up_nonnegative(
-            params.leg_notional_twd
-            / (trade["entry_qff_close"] * params.qff_contract_multiplier)
-        )
+        if params.qff_lots > 0:
+            expected_contracts = int(params.qff_lots)
+        else:
+            expected_contracts = round_half_up_nonnegative(
+                params.leg_notional_twd
+                / (trade["entry_qff_close"] * params.qff_contract_multiplier)
+            )
         if abs(qff_contracts) != expected_contracts:
             raise RuntimeError("QFF contract rounding validation failed")
         expected_qff_units = qff_contracts * params.qff_contract_multiplier
@@ -2100,6 +2152,39 @@ def run_self_tests() -> None:
             "Self-test failed: close-only tail should block entries"
         )
 
+    # bps-based QFF/CCF-leg commission: 10 bps on a 100.0 x 100 contract is
+    # 100 TWD per contract per side, vs the flat 88; the flat path must stay
+    # bit-identical when the bps knob is 0.
+    fee_frame = make_synthetic_frame(
+        pd.date_range("2026-06-08 08:45", periods=4, freq="min", tz=TAIPEI_TZ),
+        zscores=[2.1, 1.0, -0.1, -0.2],
+        tsm_start=100.0,
+        qff_start=100.0,
+    )
+    flat_fee = run_backtest(fee_frame, params).trades.iloc[0]
+    bps_params = BacktestParams(
+        entry_z=2.0,
+        exit_z=0.0,
+        leg_notional_twd=1_000_000.0,
+        initial_capital_twd=2_000_000.0,
+        max_entry_delay_minutes=15,
+        tsm_fee_bps=DEFAULT_TSM_FEE_BPS,
+        qff_fee_per_contract_twd=DEFAULT_QFF_FEE_PER_CONTRACT_TWD,
+        qff_tax_rate=DEFAULT_QFF_TAX_RATE,
+        qff_contract_multiplier=DEFAULT_QFF_CONTRACT_MULTIPLIER,
+        qff_fee_bps=10.0,
+    )
+    bps_fee = run_backtest(fee_frame, bps_params).trades.iloc[0]
+    contracts = abs(int(flat_fee["qff_contracts"]))
+    expected_flat = contracts * DEFAULT_QFF_FEE_PER_CONTRACT_TWD * 2
+    expected_bps = contracts * 100.0 * DEFAULT_QFF_CONTRACT_MULTIPLIER * 10.0 / 10000.0 * 2
+    if abs(flat_fee["qff_fee_twd"] - expected_flat) > 1e-7:
+        raise RuntimeError("Self-test failed: flat per-contract QFF fee is wrong")
+    if abs(bps_fee["qff_fee_twd"] - expected_bps) > 1e-7:
+        raise RuntimeError("Self-test failed: bps QFF fee is wrong")
+    if abs(bps_fee["qff_tax_twd"] - flat_fee["qff_tax_twd"]) > 1e-7:
+        raise RuntimeError("Self-test failed: bps fee must not change the tax")
+
 
 def make_synthetic_frame(
     timestamps: pd.DatetimeIndex,
@@ -2188,6 +2273,7 @@ def main(argv: list[str]) -> int:
         max_entry_delay_minutes=args.max_entry_delay_minutes,
         tsm_fee_bps=args.tsm_fee_bps,
         qff_fee_per_contract_twd=args.qff_fee_per_contract_twd,
+        qff_fee_bps=args.qff_fee_bps,
         qff_tax_rate=args.qff_tax_rate,
         qff_contract_multiplier=args.qff_contract_multiplier,
         max_holding_minutes=args.max_holding_minutes,
@@ -2198,6 +2284,7 @@ def main(argv: list[str]) -> int:
         drift_bail_c=args.drift_bail_c,
         frozen_mean_exit=args.frozen_mean_exit,
         persistence_k=args.persistence_k,
+        qff_lots=args.qff_lots,
     )
     frame = read_input_frame(
         args.input,
