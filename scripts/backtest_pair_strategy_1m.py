@@ -1,9 +1,49 @@
+"""1-minute pair backtest for a TAIFEX single-stock future against its US ADR.
+
+Two BacktestParams knobs carry more design than their names admit:
+
+**qff_lots** switches sizing from notional to a fixed contract count. Live
+trades a fixed lot count, so a notional backtest sizes differently from what is
+actually sent -- 1,000,000 TWD is about 3 CCF contracts or 9 QFF. Fees that are
+flat per contract scale linearly and cancel out of the comparison, but any
+per-order minimum does not: it is a fixed cost spread over a smaller position.
+The summary records `sizing_mode` so a run says which one produced it.
+
+**executable_displacement** is half the round-trip book width, in spread units,
+measured on the side that actually has to be crossed. The live system (Project
+Lux) never scores a signal at mid: it builds one spread per direction out of the
+executable sides of both books -- short = TSM/UMC bid with QFF/CCF ask, long =
+TSM/UMC ask with QFF/CCF bid -- and tests entry AND exit against the side the
+order would have to cross. Both sit `displacement` spread units from mid, in the
+direction that makes the trade harder, so the knob does two things at once:
+
+    signal  every threshold moves by displacement / spread_std of that bar
+            (a z shift, not a constant, because the rolling std moves)
+    fill    the same displacement is charged per side as crossing cost, since
+            the engine still fills at mid prices
+
+Those are two halves of one correction, not double counting: the shift decides
+when you trade, the charge converts the mid fill into the executable one. The
+spread is percentage-scaled ((fair-ccf)/(fair+ccf)*200), so one spread unit is
+one percent of leg notional -- hence the /100 in fill_costs -- and because the
+spread is already a relative quantity across both legs, charging it once on one
+leg's notional covers both books.
+
+Measured on CCF/UMC from the live tick log (2026-08-05, 17,417 quotes): CCF's
+book is one tick wide 98.2% of the time and UMC's one cent 99.9%, which is
+0.2151 spread units per side and 43 bps per round trip.
+
+Rules that read raw spread levels rather than z -- frozen_mean_exit and
+drift_bail_c -- have no displaced reference and are rejected outright when the
+displacement is on, rather than silently mixing two pricing conventions.
+"""
+
 from __future__ import annotations
 
 import argparse
 import json
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, fields, replace
 from pathlib import Path
 from typing import Any
 
@@ -66,17 +106,9 @@ class BacktestParams:
     persistence_k: int = 1
     drift_bail_c: float = 0.0
     frozen_mean_exit: bool = False
-    # When > 0 every entry is exactly this many futures contracts and
-    # leg_notional_twd is ignored. Live trades a fixed lot count, so a notional
-    # backtest sizes differently from what is actually sent: 1,000,000 TWD is
-    # about 3 CCF contracts or 9 QFF. Fees that are flat per contract scale
-    # linearly and cancel out, but any per-order minimum does not -- it is a
-    # fixed cost spread over a smaller position.
-    qff_lots: int = 0
-    # When > 0 the QFF/CCF-leg commission is charged as bps of contract
-    # notional instead of the flat per-contract rate (brokers quote stock
-    # futures either way). 0 keeps the flat per-contract schedule.
-    qff_fee_bps: float = 0.0
+    qff_lots: int = 0  # > 0 = fixed lot count per entry; overrides leg_notional_twd
+    qff_fee_bps: float = 0.0  # > 0 = bps of contract notional; replaces the flat rate
+    executable_displacement: float = 0.0  # half the round-trip book width, spread units
 
 
 @dataclass
@@ -163,7 +195,22 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
             "disables the persistence filter."
         ),
     )
-    parser.add_argument("--exit-z", type=float, default=0.0)
+    parser.add_argument(
+        "--exit-z",
+        type=float,
+        default=0.0,
+        help=(
+            "Exit threshold, measured from the mean on the FAR side of the "
+            "entry. A short-spread position (entered above the mean) exits when "
+            "z < -exit_z, so 0 exits on the mean cross and POSITIVE values wait "
+            "for the spread to overshoot past it. NEGATIVE values exit on the "
+            "same side as the entry -- -0.5 closes a short-spread position at "
+            "z = +0.5, taking partial reversion instead of the full move. May "
+            "go as deep as -entry_z; below that the exit is already true at "
+            "entry. Pass negatives as --exit-z=-0.5, since argparse reads a "
+            "space-separated leading minus as another option."
+        ),
+    )
     parser.add_argument(
         "--drift-bail-c",
         type=float,
@@ -232,7 +279,25 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help=(
             "Charge the QFF/CCF-leg commission as bps of contract notional "
             "instead of the flat per-contract rate. 0 (default) keeps the "
-            "flat --qff-fee-per-contract-twd schedule."
+            "flat --qff-fee-per-contract-twd schedule. The two are NOT "
+            "interchangeable at face value: bps is a fraction of price x "
+            "multiplier, so the flat 88 TWD is 88 bps on a 10,000 TWD contract "
+            "but only 8.8 bps on a 100,000 TWD one. Convert against the "
+            "contract notional you actually trade."
+        ),
+    )
+    parser.add_argument(
+        "--executable-displacement",
+        type=float,
+        default=0.0,
+        help=(
+            "Score signals on the executable side of both books instead of at "
+            "mid, the way the live system does. Value is half the round-trip "
+            "book width in spread units: entry and exit thresholds each move by "
+            "displacement/spread_std of that bar, and the same displacement is "
+            "charged per side as crossing cost. 0 (default) keeps mid pricing. "
+            "Measured 0.2151 for CCF/UMC (CCF one tick + UMC one cent = 43 bps "
+            "round trip)."
         ),
     )
     parser.add_argument(
@@ -512,36 +577,112 @@ def compute_next_indices(mask: np.ndarray) -> np.ndarray:
     return next_indices
 
 
+# --- entry / exit rules -------------------------------------------------------
+#
+# Every direction is scored against the spread it would actually have to cross.
+# z_short is the spread built from the TSM/UMC bid and the QFF/CCF ask -- the
+# prices you get when you SELL the equity leg and BUY the futures leg, which is
+# SHORT_TSM_LONG_QFF. z_long is the mirror. Entering short needs z_short high
+# enough; closing that same position is the long-side trade, so it is z_long
+# that has to come back. When executable_displacement is 0, executable_zscores
+# hands back the mid series for both, and every rule below reduces to the plain
+# mid-priced form -- so callers that never touch the knob (the scaled engine)
+# pass the same array three times and get exactly the pre-displacement
+# behaviour.
+#
+# entry_z_max is deliberately NOT displaced: it exists to reject dislocations
+# so large they look like a structural break, and that judgement is about the
+# true mid dislocation, not about what a marketable order would capture.
+# Scoring it on the displaced z would shift the whole accept band outward and
+# quietly admit the blow-outs the ceiling was configured to exclude.
+
+
 def entry_direction(
-    zscore: float, entry_z: float, entry_z_max: float = 0.0
+    z_short: float,
+    z_long: float,
+    zscore: float,
+    entry_z: float,
+    entry_z_max: float = 0.0,
 ) -> str | None:
     if entry_z_max > 0.0 and abs(zscore) > entry_z_max:
         return None
-    if zscore > entry_z:
+    if z_short > entry_z:
         return SHORT_TSM_LONG_QFF
-    if zscore < -entry_z:
+    if z_long < -entry_z:
         return LONG_TSM_SHORT_QFF
     return None
 
 
 def direction_still_valid(
-    zscore: float, direction: str, entry_z: float, entry_z_max: float = 0.0
+    z_short: float,
+    z_long: float,
+    zscore: float,
+    direction: str,
+    entry_z: float,
+    entry_z_max: float = 0.0,
 ) -> bool:
     if entry_z_max > 0.0 and abs(zscore) > entry_z_max:
         return False
     if direction == SHORT_TSM_LONG_QFF:
-        return zscore > entry_z
+        return z_short > entry_z
     if direction == LONG_TSM_SHORT_QFF:
-        return zscore < -entry_z
+        return z_long < -entry_z
     raise ValueError(f"Unknown direction: {direction}")
 
 
-def should_exit(zscore: float, direction: str, exit_z: float) -> bool:
+def should_exit(
+    z_short: float, z_long: float, direction: str, exit_z: float
+) -> bool:
+    # Closing flips the side: a short-spread position is unwound by the
+    # long-spread trade, so it is judged on z_long.
     if direction == SHORT_TSM_LONG_QFF:
-        return zscore < -exit_z
+        return z_long < -exit_z
     if direction == LONG_TSM_SHORT_QFF:
-        return zscore > exit_z
+        return z_short > exit_z
     raise ValueError(f"Unknown direction: {direction}")
+
+
+def executable_zscores(
+    zscore: np.ndarray,
+    spread_std: np.ndarray,
+    zvalid: np.ndarray,
+    displacement: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Directional z series. displacement is in spread units, one side.
+
+    The caller is responsible for proving spread_std is a real rolling std --
+    see require_spread_std_for_displacement. A synthesised all-ones std would
+    sail through the check below while silently reinterpreting displacement
+    from spread units into raw z units.
+    """
+    if displacement <= 0.0:
+        return zscore, zscore
+    usable = zvalid & np.isfinite(spread_std) & (spread_std > 0.0)
+    if not np.array_equal(usable, zvalid):
+        raise RuntimeError(
+            "executable_displacement needs a positive rolling spread std on "
+            "every valid z-score row; found "
+            f"{int((zvalid & ~usable).sum())} valid rows without one"
+        )
+    gap = np.zeros_like(zscore)
+    np.divide(displacement, spread_std, out=gap, where=usable)
+    return zscore - gap, zscore + gap
+
+
+def require_spread_std_for_displacement(
+    std_col: str | None, params: BacktestParams
+) -> None:
+    """displacement is quoted in spread units and converted to z by dividing by
+    the rolling spread std, so an absent std column is not a graceful fallback:
+    np.ones would turn the knob into a flat z offset, off by whatever the real
+    std happens to be. Fail loudly instead."""
+    if params.executable_displacement > 0.0 and std_col is None:
+        raise RuntimeError(
+            "executable_displacement needs a rolling spread std column "
+            "(spread_std*) to convert spread units into z units; the input "
+            "frame has none, and the all-ones fallback would silently apply "
+            "the displacement as a raw z offset"
+        )
 
 
 def direction_sign(direction: str) -> float:
@@ -593,21 +734,29 @@ def find_spread_stat_columns(columns: list[str]) -> tuple[str | None, str | None
 
 
 def compute_persistence_count(
-    entry_observation: np.ndarray, zscore: np.ndarray, entry_z: float
+    entry_observation: np.ndarray,
+    z_short: np.ndarray,
+    z_long: np.ndarray,
+    entry_z: float,
 ) -> np.ndarray:
     """For each bar, the run length of consecutive entry-eligible observations
     (skipping non-eligible bars) whose z-score has stayed beyond entry_z in the
     same direction. Used by the persistence filter to require k consecutive
-    over-threshold observations before an entry signal fires."""
-    counts = np.zeros(len(zscore), dtype=np.int64)
+    over-threshold observations before an entry signal fires.
+
+    Counted on the same executable series entry_direction uses, not on the mid
+    z: the mid series crosses entry_z earlier and more often, so counting there
+    would build streaks out of bars that could never have been entered and make
+    the filter looser than the rule it gates."""
+    counts = np.zeros(len(z_short), dtype=np.int64)
     streak = 0
     last_dir = 0
-    for index in range(len(zscore)):
+    for index in range(len(z_short)):
         if not entry_observation[index]:
             continue
-        if zscore[index] > entry_z:
+        if z_short[index] > entry_z:
             direction = 1
-        elif zscore[index] < -entry_z:
+        elif z_long[index] < -entry_z:
             direction = -1
         else:
             direction = 0
@@ -629,19 +778,55 @@ def round_half_up_nonnegative(value: float) -> int:
     return int(np.floor(value + 0.5))
 
 
-def size_position_for_direction(
-    direction: str, tsm_price: float, qff_price: float, params: BacktestParams
-) -> PositionSizing | None:
+def params_from_args(args: argparse.Namespace, **overrides: Any) -> BacktestParams:
+    """Build BacktestParams from a Namespace by matching field name to argparse
+    dest, with explicit overrides winning.
+
+    Both entry points -- this module's main() and
+    grid_search_pair_strategy_1m.make_params -- go through here. The mapping used
+    to be hand-written in both places, which is how qff_lots came to be wired
+    into the single backtest but not the grid: a new knob is now live in every
+    caller whose parser defines it, and missing from any that does not, rather
+    than depending on someone remembering to edit a second list.
+    """
+    values: dict[str, Any] = {
+        field.name: getattr(args, field.name)
+        for field in fields(BacktestParams)
+        if hasattr(args, field.name)
+    }
+    values.update(overrides)
+    return BacktestParams(**values)
+
+
+def contract_count_for_price(
+    qff_price: float, params: BacktestParams
+) -> tuple[int, float]:
+    """(contracts to trade, the pre-rounding notional count) at this price.
+
+    Single source of truth for sizing: the engine and validate_backtest both go
+    through here, so the audit checks the engine's arithmetic instead of
+    re-deriving the rule and hoping the two copies stay in step.
+
+    raw_qff_contracts stays the notional-sizing fraction in BOTH modes -- it is
+    reported per trade and documented in README.md as leg_notional_twd /
+    (price * multiplier). In fixed-lot mode it is still the informative number
+    (what notional sizing would have picked here); overwriting it with the lot
+    count would make every fixed-lot trade read as "zero rounding drift".
+    """
+    raw_qff_contracts = params.leg_notional_twd / (
+        qff_price * params.qff_contract_multiplier
+    )
     if params.qff_lots > 0:
         # Fixed-lot mode: the contract count is the input, and the notional is
         # whatever that many contracts happen to be worth at this price.
-        qff_contract_count = int(params.qff_lots)
-        raw_qff_contracts = float(qff_contract_count)
-    else:
-        raw_qff_contracts = params.leg_notional_twd / (
-            qff_price * params.qff_contract_multiplier
-        )
-        qff_contract_count = round_half_up_nonnegative(raw_qff_contracts)
+        return int(params.qff_lots), raw_qff_contracts
+    return round_half_up_nonnegative(raw_qff_contracts), raw_qff_contracts
+
+
+def size_position_for_direction(
+    direction: str, tsm_price: float, qff_price: float, params: BacktestParams
+) -> PositionSizing | None:
+    qff_contract_count, raw_qff_contracts = contract_count_for_price(qff_price, params)
     if qff_contract_count == 0:
         return None
 
@@ -674,6 +859,7 @@ def minutes_between(start: pd.Timestamp, end: pd.Timestamp) -> int:
 
 
 def validate_params(params: BacktestParams) -> None:
+    require_shared_param_fields(params)
     if params.leg_notional_twd <= 0:
         raise RuntimeError("leg_notional_twd must be positive")
     if params.initial_capital_twd <= 0:
@@ -682,6 +868,21 @@ def validate_params(params: BacktestParams) -> None:
         raise RuntimeError("max_entry_delay_minutes must be non-negative")
     if params.max_holding_minutes < 0:
         raise RuntimeError("max_holding_minutes must be non-negative")
+    # exit_z is deliberately allowed to go negative: that is the same-side exit,
+    # taking partial reversion instead of waiting for the mean cross. It only
+    # has to stay shallower than the entry, or the exit rule is already true on
+    # the bar that opened the position and every trade closes instantly.
+    #
+    # The boundary exit_z == -entry_z is NOT degenerate and is allowed: entry
+    # needs z > entry_z and the short-side exit needs z < -exit_z == entry_z,
+    # both strict, so they cannot hold on the same bar. Only a strictly deeper
+    # exit_z overlaps the entry region.
+    if params.exit_z < -params.entry_z:
+        raise RuntimeError(
+            "exit_z must be at least -entry_z; "
+            f"{params.exit_z} against entry_z {params.entry_z} would exit on the "
+            "entry bar"
+        )
     if params.entry_z_max < 0:
         raise RuntimeError("entry_z_max must be non-negative")
     if params.entry_z_max > 0 and params.entry_z_max <= params.entry_z:
@@ -702,10 +903,17 @@ def validate_params(params: BacktestParams) -> None:
         raise RuntimeError("qff_fee_per_contract_twd must be non-negative")
     if params.qff_fee_bps < 0:
         raise RuntimeError("qff_fee_bps must be non-negative")
+    # 0 selects notional sizing; anything below it is a typo that would
+    # otherwise fall through the `qff_lots > 0` test into notional mode and
+    # silently produce a run the caller never asked for.
+    if params.qff_lots < 0:
+        raise RuntimeError("qff_lots must be non-negative (0 = notional sizing)")
     if params.qff_tax_rate < 0:
         raise RuntimeError("qff_tax_rate must be non-negative")
     if params.qff_contract_multiplier <= 0:
         raise RuntimeError("qff_contract_multiplier must be positive")
+    if params.executable_displacement < 0:
+        raise RuntimeError("executable_displacement must be non-negative")
 
 
 def fill_costs(
@@ -731,12 +939,60 @@ def fill_costs(
         qff_price * params.qff_contract_multiplier * params.qff_tax_rate
     )
     qff_tax_twd = abs(qff_contracts) * qff_tax_per_contract_twd
-    total_fee_twd = tsm_fee_twd + qff_fee_twd + qff_tax_twd
+    # The engine fills at mid, so crossing the book has to be charged. One
+    # displacement per side; the spread is a percentage-scaled quantity, hence
+    # the /100 rather than /10000.
+    crossing_cost_twd = (
+        abs(tsm_units) * tsm_price * params.executable_displacement / 100.0
+    )
+    total_fee_twd = tsm_fee_twd + qff_fee_twd + qff_tax_twd + crossing_cost_twd
     return {
         "tsm_fee_twd": tsm_fee_twd,
         "qff_fee_twd": qff_fee_twd,
         "qff_tax_twd": qff_tax_twd,
+        "crossing_cost_twd": crossing_cost_twd,
         "total_fee_twd": total_fee_twd,
+    }
+
+
+# Fields the shared sizing/cost helpers read straight off `params`. Anything
+# params-shaped handed to size_position_for_direction or fill_costs has to carry
+# all of them -- backtest_pair_strategy_scaled.py passes its own ScaledParams and
+# checks itself against this list, so a new cost knob here fails loudly at
+# validation there instead of as an AttributeError on the first fill.
+SHARED_PARAM_FIELDS = (
+    "leg_notional_twd",
+    "qff_lots",
+    "qff_contract_multiplier",
+    "tsm_fee_bps",
+    "qff_fee_per_contract_twd",
+    "qff_fee_bps",
+    "qff_tax_rate",
+    "executable_displacement",
+)
+
+
+def require_shared_param_fields(params: Any) -> None:
+    missing = [name for name in SHARED_PARAM_FIELDS if not hasattr(params, name)]
+    if missing:
+        raise RuntimeError(
+            f"{type(params).__name__} is missing fields the shared sizing and "
+            f"cost helpers read: {missing}"
+        )
+
+
+def entry_cost_fields(entry_costs: dict[str, float]) -> dict[str, float]:
+    """The per-entry cost keys close_open_trade will look for on an open_trade.
+
+    Both engines build their open_trade through this, so a new cost component
+    reaches both instead of leaving one of them with a KeyError at close time.
+    """
+    return {
+        "entry_tsm_fee_twd": entry_costs["tsm_fee_twd"],
+        "entry_qff_fee_twd": entry_costs["qff_fee_twd"],
+        "entry_qff_tax_twd": entry_costs["qff_tax_twd"],
+        "entry_crossing_cost_twd": entry_costs["crossing_cost_twd"],
+        "entry_fee_twd": entry_costs["total_fee_twd"],
     }
 
 
@@ -803,12 +1059,33 @@ def run_backtest(frame: pd.DataFrame, params: BacktestParams) -> BacktestResult:
     weekend_session_close_only = data["weekend_session_close_only"].to_numpy(dtype=bool)
     friday_session_end = data["friday_session_end_force_close"].to_numpy(dtype=bool)
 
+    require_spread_std_for_displacement(std_col, params)
+    if params.executable_displacement > 0.0 and params.frozen_mean_exit:
+        raise RuntimeError(
+            "executable_displacement and frozen_mean_exit have not been tested "
+            "together; the frozen-mean rule compares spread levels directly and "
+            "would need its own displaced reference"
+        )
+    # drift_bail_c has exactly the same problem: dev_ref and the mean-chase test
+    # are raw spread comparisons with no displaced counterpart, and because a
+    # displaced entry only fires at a larger mid dislocation, dev_ref comes out
+    # inflated and the bail triggers later than it was calibrated to.
+    if params.executable_displacement > 0.0 and params.drift_bail_c > 0.0:
+        raise RuntimeError(
+            "executable_displacement and drift_bail_c have not been reconciled; "
+            "the drift-bail rule compares raw spread levels and means, so it "
+            "would need its own displaced reference"
+        )
+    z_short, z_long = executable_zscores(
+        zscore, spread_std, zvalid, params.executable_displacement
+    )
+
     entry_observation = entry_allowed & zvalid
     close_observation = close_allowed & zvalid
     next_entry_fill = compute_next_indices(entry_allowed)
     next_close_fill = compute_next_indices(close_allowed)
     persistence_count = compute_persistence_count(
-        entry_observation, zscore, params.entry_z
+        entry_observation, z_short, z_long, params.entry_z
     )
 
     state = FLAT
@@ -903,10 +1180,7 @@ def run_backtest(frame: pd.DataFrame, params: BacktestParams) -> BacktestResult:
                     "leg_notional_twd": params.leg_notional_twd,
                     "actual_leg_notional_twd": actual_leg_notional_twd,
                     "qff_contract_multiplier": params.qff_contract_multiplier,
-                    "entry_tsm_fee_twd": entry_costs["tsm_fee_twd"],
-                    "entry_qff_fee_twd": entry_costs["qff_fee_twd"],
-                    "entry_qff_tax_twd": entry_costs["qff_tax_twd"],
-                    "entry_fee_twd": entry_costs["total_fee_twd"],
+                    **entry_cost_fields(entry_costs),
                 }
                 state = position_direction
                 candidate_direction = None
@@ -1005,7 +1279,11 @@ def run_backtest(frame: pd.DataFrame, params: BacktestParams) -> BacktestResult:
         if not filled_this_bar:
             if state == FLAT and entry_observation[index]:
                 direction = entry_direction(
-                    zscore[index], params.entry_z, params.entry_z_max
+                    z_short[index],
+                    z_long[index],
+                    zscore[index],
+                    params.entry_z,
+                    params.entry_z_max,
                 )
                 if (
                     direction is not None
@@ -1059,7 +1337,12 @@ def run_backtest(frame: pd.DataFrame, params: BacktestParams) -> BacktestResult:
                             params.exit_z,
                         ):
                             exit_reason = FROZEN_MEAN_EXIT
-                    elif should_exit(zscore[index], position_direction, params.exit_z):
+                    elif should_exit(
+                        z_short[index],
+                        z_long[index],
+                        position_direction,
+                        params.exit_z,
+                    ):
                         exit_reason = "zscore_exit"
                     if exit_reason is None and params.drift_bail_c > 0.0:
                         dev_ref = direction_sign(position_direction) * (
@@ -1213,6 +1496,9 @@ def close_open_trade(
     tsm_fee_twd = open_trade["entry_tsm_fee_twd"] + exit_costs["tsm_fee_twd"]
     qff_fee_twd = open_trade["entry_qff_fee_twd"] + exit_costs["qff_fee_twd"]
     qff_tax_twd = open_trade["entry_qff_tax_twd"] + exit_costs["qff_tax_twd"]
+    crossing_cost_twd = (
+        open_trade["entry_crossing_cost_twd"] + exit_costs["crossing_cost_twd"]
+    )
     total_fee_twd = open_trade["entry_fee_twd"] + exit_costs["total_fee_twd"]
     net_pnl = gross_pnl - total_fee_twd
     trade = {
@@ -1238,10 +1524,12 @@ def close_open_trade(
         "exit_tsm_fee_twd": exit_costs["tsm_fee_twd"],
         "exit_qff_fee_twd": exit_costs["qff_fee_twd"],
         "exit_qff_tax_twd": exit_costs["qff_tax_twd"],
+        "exit_crossing_cost_twd": exit_costs["crossing_cost_twd"],
         "exit_fee_twd": exit_costs["total_fee_twd"],
         "tsm_fee_twd": tsm_fee_twd,
         "qff_fee_twd": qff_fee_twd,
         "qff_tax_twd": qff_tax_twd,
+        "crossing_cost_twd": crossing_cost_twd,
         "total_fee_twd": total_fee_twd,
         "net_pnl_twd": net_pnl,
         "total_pnl": net_pnl,
@@ -1275,6 +1563,7 @@ def build_summary(
     total_tsm_fee = float(trades["tsm_fee_twd"].sum()) if trade_count else 0.0
     total_qff_fee = float(trades["qff_fee_twd"].sum()) if trade_count else 0.0
     total_qff_tax = float(trades["qff_tax_twd"].sum()) if trade_count else 0.0
+    total_crossing = float(trades["crossing_cost_twd"].sum()) if trade_count else 0.0
     return {
         "fee_defaults_as_of": FEE_DEFAULTS_AS_OF,
         "parameters": {
@@ -1288,14 +1577,22 @@ def build_summary(
             "persistence_k": params.persistence_k,
             "drift_bail_c": params.drift_bail_c,
             "frozen_mean_exit": params.frozen_mean_exit,
+            # Both sizing inputs are recorded, plus which one actually drove the
+            # run: in fixed-lot mode leg_notional_twd is ignored entirely, and
+            # without the marker a 1-lot run and a 1M-notional run write
+            # indistinguishable parameter blocks.
+            "sizing_mode": "fixed_lots" if params.qff_lots > 0 else "notional",
+            "qff_lots": params.qff_lots,
             "leg_notional_twd": params.leg_notional_twd,
             "initial_capital_twd": params.initial_capital_twd,
             "max_entry_delay_minutes": params.max_entry_delay_minutes,
             "tsm_fee_bps": params.tsm_fee_bps,
+            "qff_fee_mode": "bps" if params.qff_fee_bps > 0.0 else "flat",
             "qff_fee_per_contract_twd": params.qff_fee_per_contract_twd,
             "qff_fee_bps": params.qff_fee_bps,
             "qff_tax_rate": params.qff_tax_rate,
             "qff_contract_multiplier": params.qff_contract_multiplier,
+            "executable_displacement": params.executable_displacement,
             "entry_fill_price": "next_entry_allowed_open",
             "exit_fill_price": "signal_exit_next_close_allowed_open",
             "forced_exit_fill_price": "close",
@@ -1339,6 +1636,7 @@ def build_summary(
         "total_tsm_fee_twd": total_tsm_fee,
         "total_qff_fee_twd": total_qff_fee,
         "total_qff_tax_twd": total_qff_tax,
+        "total_crossing_cost_twd": total_crossing,
         "return_pct": float(total_pnl / params.initial_capital_twd),
         "gross_profit_twd": gross_profit,
         "gross_loss_twd": gross_loss,
@@ -1410,9 +1708,19 @@ def validate_backtest(
         if audit_std_col is not None
         else np.ones(len(data))
     )
+    require_spread_std_for_displacement(audit_std_col, params)
+    audit_z_short, audit_z_long = executable_zscores(
+        zscore, audit_std, zvalid, params.executable_displacement
+    )
     entry_obs = entry_allowed & zvalid
     next_entry_fill = compute_next_indices(entry_allowed)
     next_close_fill = compute_next_indices(close_allowed)
+    # Re-derived independently so the audit covers the persistence gate too --
+    # it previously checked every other entry filter but not this one, which is
+    # exactly how it came to be counted on a different z series than the entry.
+    audit_persistence = compute_persistence_count(
+        entry_obs, audit_z_short, audit_z_long, params.entry_z
+    )
 
     if np.any(entry_allowed & weekend_session_close_only):
         raise RuntimeError("Weekend close-only session should not allow entries")
@@ -1444,9 +1752,21 @@ def validate_backtest(
         if int(trade["entry_delay_minutes"]) > params.max_entry_delay_minutes:
             raise RuntimeError("Entry delay exceeded max_entry_delay_minutes")
         if not direction_still_valid(
-            zscore[entry_signal_idx], direction, params.entry_z, params.entry_z_max
+            audit_z_short[entry_signal_idx],
+            audit_z_long[entry_signal_idx],
+            zscore[entry_signal_idx],
+            direction,
+            params.entry_z,
+            params.entry_z_max,
         ):
             raise RuntimeError("Entry signal z-score does not match trade direction")
+        if (
+            params.persistence_k > 1
+            and audit_persistence[entry_signal_idx] < params.persistence_k
+        ):
+            raise RuntimeError(
+                "Entry taken where the persistence gate should have blocked it"
+            )
         if params.max_entry_vol_ratio > 0:
             signal_ratio = vol_ratio[entry_signal_idx]
             if not np.isnan(signal_ratio) and signal_ratio > params.max_entry_vol_ratio:
@@ -1469,7 +1789,12 @@ def validate_backtest(
         if exit_reason == "zscore_exit":
             if next_close_fill[exit_signal_idx] != exit_idx:
                 raise RuntimeError("Exit fill is not the next close-allowed minute")
-            if not should_exit(zscore[exit_signal_idx], direction, params.exit_z):
+            if not should_exit(
+                audit_z_short[exit_signal_idx],
+                audit_z_long[exit_signal_idx],
+                direction,
+                params.exit_z,
+            ):
                 raise RuntimeError("Exit signal z-score does not match exit rule")
             if params.frozen_mean_exit:
                 raise RuntimeError(
@@ -1525,13 +1850,11 @@ def validate_backtest(
         elif exit_reason != "end_of_data":
             raise RuntimeError(f"Unknown exit reason: {exit_reason}")
 
-        if params.qff_lots > 0:
-            expected_contracts = int(params.qff_lots)
-        else:
-            expected_contracts = round_half_up_nonnegative(
-                params.leg_notional_twd
-                / (trade["entry_qff_close"] * params.qff_contract_multiplier)
-            )
+        expected_contracts, expected_raw = contract_count_for_price(
+            trade["entry_qff_close"], params
+        )
+        if abs(expected_raw - trade["raw_qff_contracts"]) > 1e-7:
+            raise RuntimeError("raw_qff_contracts validation failed")
         if abs(qff_contracts) != expected_contracts:
             raise RuntimeError("QFF contract rounding validation failed")
         expected_qff_units = qff_contracts * params.qff_contract_multiplier
@@ -2152,38 +2475,235 @@ def run_self_tests() -> None:
             "Self-test failed: close-only tail should block entries"
         )
 
-    # bps-based QFF/CCF-leg commission: 10 bps on a 100.0 x 100 contract is
-    # 100 TWD per contract per side, vs the flat 88; the flat path must stay
-    # bit-identical when the bps knob is 0.
+    # bps-based QFF/CCF-leg commission. Priced at 1000.0 x 100 = 100,000 TWD of
+    # contract notional, so 10 bps is 100 TWD per contract per side against the
+    # flat 88 -- i.e. the frame exercises the regime the knob exists for, where
+    # a bps schedule is DEARER than the flat one. (Read the bps/flat break-even
+    # off this: the flat 88 is equivalent to 8.8 bps here, and to 88 bps on a
+    # 10,000 TWD contract. The two are not interchangeable at face value.)
+    #
+    # The price also makes the transaction tax land above the rounding floor:
+    # 1000 * 100 * 2e-5 = 2.0 -> 2 TWD per contract per side. At the 100.0 used
+    # elsewhere in this suite it is 0.2 -> 0, so every tax assertion in the file
+    # would be comparing 0 to 0 and the tax term would have no coverage at all.
     fee_frame = make_synthetic_frame(
         pd.date_range("2026-06-08 08:45", periods=4, freq="min", tz=TAIPEI_TZ),
         zscores=[2.1, 1.0, -0.1, -0.2],
         tsm_start=100.0,
-        qff_start=100.0,
+        qff_start=1000.0,
     )
     flat_fee = run_backtest(fee_frame, params).trades.iloc[0]
-    bps_params = BacktestParams(
-        entry_z=2.0,
-        exit_z=0.0,
-        leg_notional_twd=1_000_000.0,
-        initial_capital_twd=2_000_000.0,
-        max_entry_delay_minutes=15,
-        tsm_fee_bps=DEFAULT_TSM_FEE_BPS,
-        qff_fee_per_contract_twd=DEFAULT_QFF_FEE_PER_CONTRACT_TWD,
-        qff_tax_rate=DEFAULT_QFF_TAX_RATE,
-        qff_contract_multiplier=DEFAULT_QFF_CONTRACT_MULTIPLIER,
-        qff_fee_bps=10.0,
-    )
+    bps_params = replace(params, qff_fee_bps=10.0)
     bps_fee = run_backtest(fee_frame, bps_params).trades.iloc[0]
     contracts = abs(int(flat_fee["qff_contracts"]))
+    contract_notional = 1000.0 * DEFAULT_QFF_CONTRACT_MULTIPLIER
     expected_flat = contracts * DEFAULT_QFF_FEE_PER_CONTRACT_TWD * 2
-    expected_bps = contracts * 100.0 * DEFAULT_QFF_CONTRACT_MULTIPLIER * 10.0 / 10000.0 * 2
+    expected_bps = contracts * contract_notional * 10.0 / 10000.0 * 2
+    expected_tax = contracts * 2.0 * 2
     if abs(flat_fee["qff_fee_twd"] - expected_flat) > 1e-7:
         raise RuntimeError("Self-test failed: flat per-contract QFF fee is wrong")
     if abs(bps_fee["qff_fee_twd"] - expected_bps) > 1e-7:
         raise RuntimeError("Self-test failed: bps QFF fee is wrong")
-    if abs(bps_fee["qff_tax_twd"] - flat_fee["qff_tax_twd"]) > 1e-7:
+    if not expected_bps > expected_flat:
+        raise RuntimeError(
+            "Self-test failed: this frame is meant to price bps above flat"
+        )
+    if abs(flat_fee["qff_tax_twd"] - expected_tax) > 1e-7:
+        raise RuntimeError("Self-test failed: transaction tax is wrong")
+    if abs(bps_fee["qff_tax_twd"] - expected_tax) > 1e-7:
         raise RuntimeError("Self-test failed: bps fee must not change the tax")
+
+    # --- executable displacement ---------------------------------------------
+    # spread_std is pinned to 1.0 so the z shift equals the displacement itself
+    # and the arithmetic stays readable. It has to be a real column: the engine
+    # now refuses displacement on a frame with no rolling std rather than
+    # silently substituting ones and rescaling the knob.
+    exec_times = pd.date_range("2026-06-08 08:45", periods=6, freq="min", tz=TAIPEI_TZ)
+    exec_params = params
+    displaced_params = replace(exec_params, executable_displacement=0.3)
+    unit_std = [1.0] * len(exec_times)
+
+    # z of 2.2 clears entry_z at mid but not once the short side is 0.3 lower
+    marginal = make_synthetic_frame(
+        exec_times,
+        zscores=[2.2, 2.2, -0.5, -0.5, -0.5, -0.5],
+        tsm_start=100.0,
+        qff_start=100.0,
+        spread_std=unit_std,
+    )
+    if len(run_backtest(marginal, exec_params).trades) != 1:
+        raise RuntimeError("Self-test failed: marginal z should trade at mid")
+    if len(run_backtest(marginal, displaced_params).trades) != 0:
+        raise RuntimeError(
+            "Self-test failed: displacement should have blocked the marginal entry"
+        )
+
+    # 2.4 still clears (2.4 - 0.3 > 2.0); the exit has to overshoot by the same
+    # amount, so -0.2 is not enough for a short-spread position but -0.4 is
+    clears = make_synthetic_frame(
+        exec_times,
+        zscores=[2.4, 2.4, -0.2, -0.2, -0.4, -0.4],
+        tsm_start=100.0,
+        qff_start=100.0,
+        spread_std=unit_std,
+    )
+    displaced_trades = run_backtest(clears, displaced_params).trades
+    if len(displaced_trades) != 1:
+        raise RuntimeError("Self-test failed: 2.4 should still clear the displaced bar")
+    displaced_trade = displaced_trades.iloc[0]
+    if int(displaced_trade["exit_signal_idx"]) != 4:
+        raise RuntimeError(
+            "Self-test failed: displaced exit should wait for the deeper overshoot"
+        )
+    mid_trade = run_backtest(clears, exec_params).trades.iloc[0]
+    if int(mid_trade["exit_signal_idx"]) != 2:
+        raise RuntimeError("Self-test failed: mid exit should fire on the first cross")
+
+    # the same displacement is charged per side against the ADR-leg notional
+    expected_crossing = (
+        abs(displaced_trade["tsm_units"])
+        * displaced_trade["entry_tsm_twd_fair"]
+        * 0.3
+        / 100.0
+        + abs(displaced_trade["tsm_units"])
+        * displaced_trade["exit_tsm_twd_fair"]
+        * 0.3
+        / 100.0
+    )
+    if abs(displaced_trade["crossing_cost_twd"] - expected_crossing) > 1e-7:
+        raise RuntimeError("Self-test failed: crossing cost is wrong")
+    if abs(mid_trade["crossing_cost_twd"]) > 1e-12:
+        raise RuntimeError("Self-test failed: mid pricing must charge no crossing cost")
+
+    # --- same-side exit (negative exit_z) ------------------------------------
+    same_side = make_synthetic_frame(
+        pd.date_range("2026-06-08 08:45", periods=6, freq="min", tz=TAIPEI_TZ),
+        zscores=[2.5, 2.5, 0.8, 0.8, -0.1, -0.1],
+        tsm_start=100.0,
+        qff_start=100.0,
+    )
+    # exit_z 0 waits for the mean cross at index 4; -1.0 takes the partial
+    # reversion at index 2, while the position is still above the mean
+    cross_exit = run_backtest(same_side, exec_params).trades.iloc[0]
+    if int(cross_exit["exit_signal_idx"]) != 4:
+        raise RuntimeError("Self-test failed: exit_z 0 should wait for the mean cross")
+    partial = run_backtest(
+        same_side, replace(exec_params, exit_z=-1.0)
+    ).trades.iloc[0]
+    if int(partial["exit_signal_idx"]) != 2:
+        raise RuntimeError("Self-test failed: negative exit_z should exit on the same side")
+    if partial["exit_signal_zscore"] <= 0:
+        raise RuntimeError("Self-test failed: same-side exit should close above the mean")
+    # exit_z == -entry_z is the legal boundary, not a degenerate cell: entry
+    # needs z > 2.0 and the short-side exit needs z < 2.0, both strict, so they
+    # cannot both be true on one bar. Only a strictly deeper exit_z overlaps.
+    validate_params(replace(exec_params, exit_z=-2.0))
+    boundary = run_backtest(same_side, replace(exec_params, exit_z=-2.0)).trades
+    if len(boundary) != 1:
+        raise RuntimeError(
+            "Self-test failed: exit_z == -entry_z should still open a trade"
+        )
+    if int(boundary.iloc[0]["entry_idx"]) != 1:
+        raise RuntimeError(
+            "Self-test failed: boundary exit_z must not close on the entry bar"
+        )
+    try:
+        validate_params(replace(exec_params, exit_z=-2.5))
+    except RuntimeError:
+        pass
+    else:
+        raise RuntimeError("Self-test failed: exit_z < -entry_z should be rejected")
+
+    # --- entry_z_max stays on the MID z under displacement --------------------
+    # 2.45 is a dislocation the ceiling of 2.4 exists to reject. Scored on the
+    # displaced short side it reads 2.15 and would slip under the ceiling, so
+    # the rule has to keep measuring the true mid dislocation.
+    ceiling_frame = make_synthetic_frame(
+        exec_times,
+        zscores=[2.45, 2.45, -0.5, -0.5, -0.5, -0.5],
+        tsm_start=100.0,
+        qff_start=100.0,
+        spread_std=unit_std,
+    )
+    capped = replace(displaced_params, entry_z_max=2.4)
+    if len(run_backtest(ceiling_frame, displaced_params).trades) != 1:
+        raise RuntimeError("Self-test failed: 2.45 should clear the displaced entry")
+    if len(run_backtest(ceiling_frame, capped).trades) != 0:
+        raise RuntimeError(
+            "Self-test failed: entry_z_max must reject the mid dislocation even "
+            "when the displaced z sits under the ceiling"
+        )
+
+    # --- persistence counts the executable series -----------------------------
+    # 2.2 clears entry_z at mid but not displaced, so it must not extend the
+    # streak: with k=2 the entry can only fire on the second bar that actually
+    # cleared the displaced threshold.
+    persist_frame = make_synthetic_frame(
+        pd.date_range("2026-06-08 08:45", periods=8, freq="min", tz=TAIPEI_TZ),
+        zscores=[2.2, 2.4, 2.4, -0.9, -0.9, -0.9, -0.9, -0.9],
+        tsm_start=100.0,
+        qff_start=100.0,
+        spread_std=[1.0] * 8,
+    )
+    persist_k2 = replace(displaced_params, persistence_k=2)
+    persist_trades = run_backtest(persist_frame, persist_k2).trades
+    if len(persist_trades) != 1:
+        raise RuntimeError("Self-test failed: displaced persistence should still trade")
+    if int(persist_trades.iloc[0]["entry_signal_idx"]) != 2:
+        raise RuntimeError(
+            "Self-test failed: a mid-only crossing must not extend the "
+            "persistence streak"
+        )
+
+    # --- guards ---------------------------------------------------------------
+    no_std = make_synthetic_frame(
+        exec_times,
+        zscores=[2.4, 2.4, -0.4, -0.4, -0.4, -0.4],
+        tsm_start=100.0,
+        qff_start=100.0,
+    )
+    try:
+        run_backtest(no_std, displaced_params)
+    except RuntimeError:
+        pass
+    else:
+        raise RuntimeError(
+            "Self-test failed: displacement without a spread_std column should "
+            "be rejected, not silently rescaled"
+        )
+    try:
+        run_backtest(clears, replace(displaced_params, drift_bail_c=1.0))
+    except RuntimeError:
+        pass
+    else:
+        raise RuntimeError(
+            "Self-test failed: drift_bail_c with displacement should be rejected"
+        )
+    try:
+        validate_params(replace(exec_params, qff_lots=-3))
+    except RuntimeError:
+        pass
+    else:
+        raise RuntimeError("Self-test failed: negative qff_lots should be rejected")
+
+    # --- fixed-lot sizing -----------------------------------------------------
+    # The lot count drives the position; raw_qff_contracts must stay the
+    # notional-sizing fraction so the rounding-drift column keeps its meaning,
+    # and the summary has to say which mode produced the run.
+    lots_result = run_backtest(fee_frame, replace(params, qff_lots=3))
+    lots_trade = lots_result.trades.iloc[0]
+    if abs(int(lots_trade["qff_contracts"])) != 3:
+        raise RuntimeError("Self-test failed: fixed-lot mode should trade 3 contracts")
+    if abs(lots_trade["raw_qff_contracts"] - 10.0) > 1e-9:
+        raise RuntimeError(
+            "Self-test failed: raw_qff_contracts should stay the notional fraction"
+        )
+    if abs(lots_trade["actual_leg_notional_twd"] - 3 * 1000.0 * 100.0) > 1e-7:
+        raise RuntimeError("Self-test failed: fixed-lot notional is wrong")
+    if lots_result.summary["parameters"]["sizing_mode"] != "fixed_lots":
+        raise RuntimeError("Self-test failed: summary should record fixed_lots sizing")
+    if run_backtest(fee_frame, params).summary["parameters"]["sizing_mode"] != "notional":
+        raise RuntimeError("Self-test failed: summary should record notional sizing")
 
 
 def make_synthetic_frame(
@@ -2265,27 +2785,7 @@ def main(argv: list[str]) -> int:
         run_self_tests()
         print("Self-tests passed")
 
-    params = BacktestParams(
-        entry_z=args.entry_z,
-        exit_z=args.exit_z,
-        leg_notional_twd=args.leg_notional_twd,
-        initial_capital_twd=args.initial_capital_twd,
-        max_entry_delay_minutes=args.max_entry_delay_minutes,
-        tsm_fee_bps=args.tsm_fee_bps,
-        qff_fee_per_contract_twd=args.qff_fee_per_contract_twd,
-        qff_fee_bps=args.qff_fee_bps,
-        qff_tax_rate=args.qff_tax_rate,
-        qff_contract_multiplier=args.qff_contract_multiplier,
-        max_holding_minutes=args.max_holding_minutes,
-        entry_z_max=args.entry_z_max,
-        max_entry_vol_ratio=args.max_entry_vol_ratio,
-        max_entry_adr_share=args.max_entry_adr_share,
-        max_entry_qff_vol_surprise=args.max_entry_qff_vol_surprise,
-        drift_bail_c=args.drift_bail_c,
-        frozen_mean_exit=args.frozen_mean_exit,
-        persistence_k=args.persistence_k,
-        qff_lots=args.qff_lots,
-    )
+    params = params_from_args(args)
     frame = read_input_frame(
         args.input,
         qff_ohlcv_path=args.qff_ohlcv,

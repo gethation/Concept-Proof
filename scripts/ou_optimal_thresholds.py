@@ -100,12 +100,30 @@ def estimate_cost_z(trades_path: Path, mean_rolling_std: float) -> dict[str, flo
     )
     good = np.abs(conv) > 0.1
     twd_per_spread = float(np.median(t.loc[good, "gross_pnl_twd"] / conv[good]))
-    fee_per_trade = float(t["total_fee_twd"].mean())
+    # Book-crossing cost is excluded from the fee that becomes cost_z. The
+    # thresholds this script recommends are consumed on the MID z scale, and
+    # run_backtest --executable-displacement already widens every threshold by
+    # displacement/spread_std of the bar. Leaving the crossing cost in here
+    # would charge the same book width twice and hand back bands that are
+    # systematically too wide. It is reported separately instead.
+    crossing_per_trade = (
+        float(t["crossing_cost_twd"].mean())
+        if "crossing_cost_twd" in t.columns
+        else 0.0
+    )
+    fee_per_trade = float(t["total_fee_twd"].mean()) - crossing_per_trade
     cost_spread = fee_per_trade / twd_per_spread
     cost_z = cost_spread / mean_rolling_std
     return {
         "twd_per_spread_unit": twd_per_spread,
         "fee_per_trade_twd": fee_per_trade,
+        "crossing_cost_per_trade_twd": crossing_per_trade,
+        # What the engine will add back as a threshold shift, in z units, if the
+        # same displacement is passed to run_backtest. Shown so the two halves
+        # of the cost are visible side by side rather than silently merged.
+        "crossing_cost_z_units": (
+            crossing_per_trade / twd_per_spread / mean_rolling_std
+        ),
         "cost_spread_units": cost_spread,
         "cost_z_units": cost_z,
     }

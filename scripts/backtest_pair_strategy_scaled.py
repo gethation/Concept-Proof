@@ -59,6 +59,12 @@ DEFAULT_SUMMARY_PATH = Path(
 
 @dataclass(frozen=True)
 class ScaledParams:
+    """Ladder params. Everything in base.SHARED_PARAM_FIELDS has to be present
+    because this object is handed straight to base.size_position_for_direction
+    and base.fill_costs; validate_scaled_params asserts that, so a new cost knob
+    on BacktestParams surfaces here as a clear error rather than an
+    AttributeError on the first fill."""
+
     level1: float
     level2: float
     leg_notional_twd: float
@@ -68,6 +74,11 @@ class ScaledParams:
     qff_fee_per_contract_twd: float
     qff_tax_rate: float
     qff_contract_multiplier: float
+    # Mirror BacktestParams' defaults: the ladder has no CLI for these yet, but
+    # the shared helpers read them on every fill.
+    qff_lots: int = 0
+    qff_fee_bps: float = 0.0
+    executable_displacement: float = 0.0
 
 
 @dataclass
@@ -86,6 +97,7 @@ class UnitSlot:
 
 
 def validate_scaled_params(params: ScaledParams) -> None:
+    base.require_shared_param_fields(params)
     if params.level1 <= 0:
         raise RuntimeError("level1 must be positive")
     if params.level2 != 0 and params.level2 <= params.level1:
@@ -100,10 +112,21 @@ def validate_scaled_params(params: ScaledParams) -> None:
         raise RuntimeError("tsm_fee_bps must be non-negative")
     if params.qff_fee_per_contract_twd < 0:
         raise RuntimeError("qff_fee_per_contract_twd must be non-negative")
+    if params.qff_fee_bps < 0:
+        raise RuntimeError("qff_fee_bps must be non-negative")
+    if params.qff_lots < 0:
+        raise RuntimeError("qff_lots must be non-negative (0 = notional sizing)")
     if params.qff_tax_rate < 0:
         raise RuntimeError("qff_tax_rate must be non-negative")
     if params.qff_contract_multiplier <= 0:
         raise RuntimeError("qff_contract_multiplier must be positive")
+    # The ladder scores every level off the mid z-score, so it has no displaced
+    # reference to run the executable-side rules against.
+    if params.executable_displacement != 0.0:
+        raise RuntimeError(
+            "executable_displacement is not supported by the scaled ladder; "
+            "the level rules compare mid z-scores directly"
+        )
 
 
 def should_exit_level(zscore: float, direction: str, exit_level: float) -> bool:
@@ -347,10 +370,7 @@ def run_scaled_backtest(
                     "leg_notional_twd": params.leg_notional_twd,
                     "actual_leg_notional_twd": sizing.actual_leg_notional_twd,
                     "qff_contract_multiplier": params.qff_contract_multiplier,
-                    "entry_tsm_fee_twd": entry_costs["tsm_fee_twd"],
-                    "entry_qff_fee_twd": entry_costs["qff_fee_twd"],
-                    "entry_qff_tax_twd": entry_costs["qff_tax_twd"],
-                    "entry_fee_twd": entry_costs["total_fee_twd"],
+                    **base.entry_cost_fields(entry_costs),
                     "unit_level": unit.unit_level,
                     "cycle_id": cycle_id,
                 }
@@ -402,7 +422,11 @@ def run_scaled_backtest(
             and not unit1.filled_this_bar
             and entry_observation[index]
         ):
-            direction = base.entry_direction(zscore[index], params.level1)
+            # The ladder is mid-priced, so the short/long/mid z arguments the
+            # base rule takes are all the same series here.
+            direction = base.entry_direction(
+                zscore[index], zscore[index], zscore[index], params.level1
+            )
             if direction is not None:
                 fill_idx = next_entry_fill[index]
                 if fill_idx != -1 and base.minutes_between(
@@ -420,7 +444,9 @@ def run_scaled_backtest(
             and unit1.state == OPEN
             and entry_observation[index]
         ):
-            direction = base.entry_direction(zscore[index], params.level2)
+            direction = base.entry_direction(
+                zscore[index], zscore[index], zscore[index], params.level2
+            )
             if direction is not None and direction == unit1.direction:
                 fill_idx = next_entry_fill[index]
                 if fill_idx != -1 and base.minutes_between(
@@ -736,7 +762,11 @@ def validate_scaled_backtest(
         if delay > params.max_entry_delay_minutes:
             raise RuntimeError("Trade entry delay exceeds the maximum")
         if not base.direction_still_valid(
-            zscore[entry_signal_idx], direction, entry_level
+            zscore[entry_signal_idx],
+            zscore[entry_signal_idx],
+            zscore[entry_signal_idx],
+            direction,
+            entry_level,
         ):
             raise RuntimeError(
                 f"Unit {unit_level} entry signal below its entry level"

@@ -49,6 +49,16 @@ class DailyZipLink:
     def source_trade_date(self) -> str:
         return self.trade_date.isoformat()
 
+    @classmethod
+    def from_path(cls, path: Path) -> "DailyZipLink":
+        """Inverse of `filename`, kept next to it so the two cannot drift.
+
+        url is empty because a cached zip has no fetch URL; nothing downstream
+        reads it (download_zip is the only consumer and the cache path skips
+        it).
+        """
+        return cls(datetime.strptime(path.stem, "Daily_%Y_%m_%d").date(), "")
+
 
 def build_http_session() -> requests.Session:
     session = requests.Session()
@@ -249,24 +259,66 @@ def empty_ticks_frame() -> pd.DataFrame:
     )
 
 
-def third_wednesday(year: int, month: int) -> date:
+def find_trade_date_gaps(
+    links: list[DailyZipLink], max_gap_days: int
+) -> list[tuple[str, str, int]]:
+    """Consecutive cached trade dates further apart than max_gap_days.
+
+    Calendar days, not trading days: weekends and short holidays are normal, so
+    the default threshold has to clear a long weekend. Anything wider is a
+    missing capture, and it has to be reported rather than silently bridged.
+    """
+    gaps: list[tuple[str, str, int]] = []
+    ordered = sorted(links, key=lambda item: item.trade_date)
+    for previous, current in zip(ordered, ordered[1:]):
+        delta = (current.trade_date - previous.trade_date).days
+        if delta > max_gap_days:
+            gaps.append(
+                (previous.source_trade_date, current.source_trade_date, delta)
+            )
+    return gaps
+
+
+def nth_weekday(year: int, month: int, weekday: int, n: int) -> date:
+    """n-th `weekday` of the month, weekday in Monday=0 .. Sunday=6."""
     first_day = date(year, month, 1)
-    first_wednesday_offset = (2 - first_day.weekday()) % 7
-    return first_day + timedelta(days=first_wednesday_offset + 14)
+    offset = (weekday - first_day.weekday()) % 7
+    return first_day + timedelta(days=offset + 7 * (n - 1))
 
 
-def contract_expiry(contract_month: str) -> date:
+def third_wednesday(year: int, month: int) -> date:
+    return nth_weekday(year, month, 2, 3)
+
+
+def third_friday(year: int, month: int) -> date:
+    return nth_weekday(year, month, 4, 3)
+
+
+# TAIFEX stock futures (QFF/CCF/CDF) expire on the third Wednesday; the US index
+# futures (UDF/SPF/UNF/SXF) expire on the third Friday, matching the US SOQ.
+EXPIRY_RULES = {
+    "third_wednesday": third_wednesday,
+    "third_friday": third_friday,
+}
+DEFAULT_EXPIRY_RULE = "third_wednesday"
+
+
+def contract_expiry(contract_month: str, rule: str = DEFAULT_EXPIRY_RULE) -> date:
     year = int(contract_month[:4])
     month = int(contract_month[4:6])
-    return third_wednesday(year, month)
+    return EXPIRY_RULES[rule](year, month)
 
 
-def select_front_month_ticks(ticks: pd.DataFrame) -> pd.DataFrame:
+def select_front_month_ticks(
+    ticks: pd.DataFrame, expiry_rule: str = DEFAULT_EXPIRY_RULE
+) -> pd.DataFrame:
     if ticks.empty:
         return ticks.copy()
 
     months = sorted(ticks["contract_month"].unique())
-    expiry_by_month = {month: contract_expiry(month) for month in months}
+    expiry_by_month = {
+        month: contract_expiry(month, expiry_rule) for month in months
+    }
 
     trade_dates = sorted(ticks["source_trade_date"].unique())
     front_by_trade_date: dict[str, str] = {}
@@ -443,6 +495,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--days", type=int, default=30)
     parser.add_argument("--product", default="QFF")
     parser.add_argument(
+        "--expiry-rule",
+        choices=sorted(EXPIRY_RULES),
+        default=DEFAULT_EXPIRY_RULE,
+        help=(
+            "Last trading day convention used to pick the front month. "
+            "Stock futures use third_wednesday (default); the US index "
+            "futures UDF/SPF/UNF/SXF use third_friday."
+        ),
+    )
+    parser.add_argument(
         "--raw-dir",
         type=Path,
         default=Path("data/raw/taifex_time_sales"),
@@ -458,6 +520,35 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="Re-download zip files even when cached files exist.",
     )
     parser.add_argument(
+        "--contract-month",
+        default=None,
+        help=(
+            "Pin one contract month (YYYYMM) instead of rolling the front "
+            "month. Useful when the paired US leg only has history for one "
+            "expiry, since matched maturities are what makes the basis clean."
+        ),
+    )
+    parser.add_argument(
+        "--from-cache",
+        action="store_true",
+        help=(
+            "Build from every zip already in --raw-dir instead of fetching the "
+            "current 30-trading-day window. TAIFEX only publishes 30 days, so "
+            "cached zips are the only route to older history. --days is ignored "
+            "in this mode; continuity is checked with --max-gap-days instead."
+        ),
+    )
+    parser.add_argument(
+        "--max-gap-days",
+        type=int,
+        default=5,
+        help=(
+            "With --from-cache, the widest calendar gap tolerated between "
+            "consecutive cached trade dates. 5 clears a long weekend; raise it "
+            "deliberately for a known market closure such as Lunar New Year."
+        ),
+    )
+    parser.add_argument(
         "--validate-daily",
         action="store_true",
         help="Compare normalized contract/session volumes with TAIFEX daily reports.",
@@ -471,19 +562,54 @@ def main(argv: list[str]) -> int:
     if args.days <= 0:
         raise ValueError("--days must be positive")
 
+    # --expiry-rule only feeds the front-month roll, which pinning bypasses.
+    # Accepting both silently would look composable and do nothing.
+    if args.contract_month and args.expiry_rule != DEFAULT_EXPIRY_RULE:
+        raise RuntimeError(
+            "--expiry-rule has no effect with --contract-month: pinning a month "
+            "skips the front-month roll that the rule drives"
+        )
+
     product = args.product.strip().upper()
     session = build_http_session()
-    links = fetch_daily_zip_links(session, args.days, args.timeout)
-    print(
-        f"Found {len(links)} TAIFEX CSV zips: "
-        f"{links[0].source_trade_date} to {links[-1].source_trade_date}"
-    )
 
-    zip_paths = [
-        download_zip(session, link, args.raw_dir, args.refresh, args.timeout)
-        for link in links
-    ]
-    print(f"Cached {len(zip_paths)} zip files under {args.raw_dir}")
+    if args.from_cache:
+        zip_paths = sorted(args.raw_dir.glob("Daily_*.zip"))
+        if not zip_paths:
+            raise RuntimeError(f"No cached zips under {args.raw_dir}")
+        links = [DailyZipLink.from_path(path) for path in zip_paths]
+        # fetch_daily_zip_links refuses to return fewer links than requested, so
+        # the network path could never produce a hole. The cache path takes
+        # whatever is on disk, and a hole is not benign: the rolling z-score
+        # window is bar-count based, so a gap splices price levels weeks apart
+        # and manufactures z-scores at the seam.
+        gaps = find_trade_date_gaps(links, args.max_gap_days)
+        if gaps:
+            detail = "; ".join(
+                f"{start} -> {end} ({days} days)" for start, end, days in gaps
+            )
+            raise RuntimeError(
+                f"Cached zips under {args.raw_dir} have {len(gaps)} gap(s) wider "
+                f"than --max-gap-days {args.max_gap_days}: {detail}. Re-fetch the "
+                "missing days, or raise --max-gap-days if the gap is a known "
+                "market closure."
+            )
+        print(
+            f"Using {len(zip_paths)} cached TAIFEX CSV zips: "
+            f"{links[0].source_trade_date} to {links[-1].source_trade_date}"
+        )
+    else:
+        links = fetch_daily_zip_links(session, args.days, args.timeout)
+        print(
+            f"Found {len(links)} TAIFEX CSV zips: "
+            f"{links[0].source_trade_date} to {links[-1].source_trade_date}"
+        )
+
+        zip_paths = [
+            download_zip(session, link, args.raw_dir, args.refresh, args.timeout)
+            for link in links
+        ]
+        print(f"Cached {len(zip_paths)} zip files under {args.raw_dir}")
 
     normalized_parts: list[pd.DataFrame] = []
     for link, path in zip(links, zip_paths):
@@ -499,10 +625,41 @@ def main(argv: list[str]) -> int:
         validate_against_daily_reports(session, ticks, links, product, args.timeout)
         print("Daily report volume validation passed")
 
-    front_ticks = select_front_month_ticks(ticks)
+    if args.contract_month:
+        front_ticks = ticks[ticks["contract_month"].eq(args.contract_month)].copy()
+        if front_ticks.empty:
+            available = sorted(ticks["contract_month"].unique())
+            raise RuntimeError(
+                f"No {product} rows for contract month {args.contract_month}; "
+                f"available: {available}"
+            )
+        # Pinning skips the front-month roll, so it also skips its liquidity
+        # guarantee: on days when the pinned month is still a distant back
+        # month it barely trades, and the sparse bars forward-fill downstream
+        # into quotes that were never executable. The empty check above only
+        # catches a month missing outright, so report per-day coverage.
+        covered = front_ticks["source_trade_date"].nunique()
+        all_days = ticks["source_trade_date"].nunique()
+        print(
+            f"Contract month {args.contract_month} present on {covered}/{all_days} "
+            "trade dates"
+        )
+        thin = (
+            front_ticks.groupby("source_trade_date").size().pipe(lambda s: s[s < 100])
+        )
+        if covered < all_days or not thin.empty:
+            print(
+                "WARNING: pinned month has "
+                f"{all_days - covered} day(s) with no prints and "
+                f"{len(thin)} day(s) under 100 prints; the front-month roll "
+                "exists to avoid exactly this"
+            )
+    else:
+        front_ticks = select_front_month_ticks(ticks, args.expiry_rule)
     bars = aggregate_1m(front_ticks)
     write_bars(bars, args.out)
-    print(f"Selected {len(front_ticks):,} front-month rows")
+    label = args.contract_month or "front-month"
+    print(f"Selected {len(front_ticks):,} {label} rows")
     print(f"Wrote {len(bars):,} 1m bars to {args.out}")
     return 0
 

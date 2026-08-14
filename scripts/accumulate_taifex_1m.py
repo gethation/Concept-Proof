@@ -37,6 +37,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--product", default="CCF")
     parser.add_argument("--days", type=int, default=30)
     parser.add_argument(
+        "--expiry-rule",
+        choices=sorted(build_qff1_1m.EXPIRY_RULES),
+        default=build_qff1_1m.DEFAULT_EXPIRY_RULE,
+        help="Front-month convention; US index futures need third_friday.",
+    )
+    parser.add_argument(
         "--out",
         type=Path,
         default=None,
@@ -156,6 +162,7 @@ def main(argv: list[str]) -> int:
             "--raw-dir", str(args.raw_dir),
             "--out", str(fetch_path),
             "--timeout", str(args.timeout),
+            "--expiry-rule", args.expiry_rule,
         ]
         if args.refresh:
             fetch_argv.append("--refresh")
@@ -174,12 +181,36 @@ def main(argv: list[str]) -> int:
 
     conflicts = report_conflicts(existing, fresh)
 
-    combined = pd.concat([existing, fresh], ignore_index=True)
+    # Replace whole session days, not individual minutes. A per-minute union
+    # only overwrites bars the fresh capture also produced, so any bar the old
+    # capture had and the new one does not -- a different contract month trading
+    # at different minutes, which is exactly what a wrong --expiry-rule
+    # produces -- survives untouched and unreported. Since TAIFEX publishes only
+    # 30 trading days, a day that ages out that way can never be repaired.
+    refetched_days = set(session_days(fresh))
+    superseded = 0
+    orphaned = 0
+    if not existing.empty:
+        replaced_mask = session_days(existing).isin(refetched_days)
+        superseded = int(replaced_mask.sum())
+        # Bars the old capture had on a re-fetched day that the fresh capture
+        # does not produce at all. Under the old per-minute union these were the
+        # rows that quietly survived; now they are removed, and counted so a
+        # wrong-rule capture is visible instead of silent.
+        fresh_minutes = set(pd.DatetimeIndex(fresh["timestamp"]))
+        replaced_rows = existing[replaced_mask]
+        orphaned = int(
+            (~pd.DatetimeIndex(replaced_rows["timestamp"]).isin(fresh_minutes)).sum()
+        )
+        existing_kept = existing[~replaced_mask]
+    else:
+        existing_kept = existing
+
+    combined = pd.concat([existing_kept, fresh], ignore_index=True)
     # concat with an empty object-dtype frame (first run) degrades the column
     combined["timestamp"] = pd.to_datetime(
         combined["timestamp"], utc=True
     ).dt.tz_convert(TAIPEI_TZ)
-    # fresh rows come last, so keep="last" lets a re-fetch correct a partial day
     combined = combined.drop_duplicates(subset=["timestamp"], keep="last")
     combined = combined.sort_values("timestamp").reset_index(drop=True)
 
@@ -191,6 +222,19 @@ def main(argv: list[str]) -> int:
 
     added = len(combined) - len(existing)
     new_days = set(session_days(combined)) - set(session_days(existing))
+    if superseded:
+        replaced_days = len(refetched_days & set(session_days(existing)))
+        print(
+            f"Replaced {superseded:,} existing bars across {replaced_days} "
+            "re-fetched session day(s)"
+        )
+    if orphaned:
+        print(
+            f"WARNING: {orphaned:,} of the replaced bars had no counterpart in "
+            "the fresh capture. A clean re-aggregation reproduces the same "
+            "minutes, so this usually means the earlier run used a different "
+            "--expiry-rule or --contract-month and stored another contract."
+        )
     print()
     summarize(combined, "Merged")
     print(

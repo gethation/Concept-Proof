@@ -83,6 +83,59 @@ def escape(value: Any) -> str:
     return html.escape(str(value))
 
 
+# Every component fill_costs charges, as (summary key, label). Derived from the
+# summary rather than hard-coded three-at-a-time, so the breakdown keeps summing
+# to total_fee_twd when a new cost lands: crossing cost was added to the total
+# and this line went on showing TSM/QFF/Tax, hiding ~79% of the trading cost on
+# executable-displacement runs.
+FEE_COMPONENTS = (
+    ("total_tsm_fee_twd", "TSM"),
+    ("total_qff_fee_twd", "QFF"),
+    ("total_qff_tax_twd", "Tax"),
+    ("total_crossing_cost_twd", "Crossing"),
+)
+
+
+def sizing_text(parameters: dict[str, Any]) -> str:
+    """Report the sizing input that actually drove the run. Fixed-lot mode
+    ignores leg_notional_twd entirely, so printing it unconditionally labelled
+    a 1-lot run as a 1,000,000 TWD one."""
+    lots = parameters.get("qff_lots") or 0
+    if lots:
+        return f"Fixed {fmt_int(lots)} contracts/entry (leg notional ignored)"
+    return f"Target leg notional {fmt_number(parameters.get('leg_notional_twd'))} TWD"
+
+
+def qff_fee_text(parameters: dict[str, Any]) -> str:
+    """Same story for the commission: the bps knob replaces the flat schedule,
+    so showing the now-inert flat rate misstated the cost model."""
+    bps = parameters.get("qff_fee_bps") or 0.0
+    if bps:
+        return f"{fmt_number(bps)} bps of contract notional per side"
+    return (
+        f"{fmt_number(parameters.get('qff_fee_per_contract_twd'))} "
+        "TWD/contract/side"
+    )
+
+
+def fee_breakdown_text(summary: dict[str, Any]) -> str:
+    parts = [
+        f"{label} {fmt_number(summary[key])}"
+        for key, label in FEE_COMPONENTS
+        if summary.get(key) is not None
+    ]
+    total = summary.get("total_fee_twd")
+    accounted = sum(
+        float(summary[key]) for key, _ in FEE_COMPONENTS if summary.get(key) is not None
+    )
+    if total is not None and abs(float(total) - accounted) > 0.5:
+        # A summary written by an older engine, or a cost this report does not
+        # know about. Say so rather than quietly showing parts that do not add
+        # up to the headline number.
+        parts.append(f"Unattributed {fmt_number(float(total) - accounted)}")
+    return " / ".join(parts)
+
+
 def make_metric_cards(summary: dict[str, Any]) -> str:
     cards = [
         (
@@ -112,7 +165,7 @@ def make_metric_cards(summary: dict[str, Any]) -> str:
         (
             "Total Fee",
             f"{fmt_number(summary.get('total_fee_twd'))} TWD",
-            f"TSM {fmt_number(summary.get('total_tsm_fee_twd'))} / QFF {fmt_number(summary.get('total_qff_fee_twd'))} / Tax {fmt_number(summary.get('total_qff_tax_twd'))}",
+            fee_breakdown_text(summary),
             "neutral",
         ),
         (
@@ -141,13 +194,15 @@ def make_parameters_table(summary: dict[str, Any]) -> str:
         ("Rows", fmt_int(summary.get("rows"))),
         ("Entry Z", fmt_number(parameters.get("entry_z"))),
         ("Exit Z", fmt_number(parameters.get("exit_z"))),
-        ("Target leg notional", f"{fmt_number(parameters.get('leg_notional_twd'))} TWD"),
+        ("Position sizing", sizing_text(parameters)),
         ("Initial capital", f"{fmt_number(parameters.get('initial_capital_twd'))} TWD"),
         ("Max entry delay", f"{fmt_int(parameters.get('max_entry_delay_minutes'))} minutes"),
         ("TSM fee", f"{fmt_number(parameters.get('tsm_fee_bps'))} bps per side"),
+        ("QFF fee", qff_fee_text(parameters)),
         (
-            "QFF fee",
-            f"{fmt_number(parameters.get('qff_fee_per_contract_twd'))} TWD/contract/side",
+            "Executable displacement",
+            f"{fmt_number(parameters.get('executable_displacement'), digits=4)} "
+            "spread units per side",
         ),
         ("QFF tax rate", fmt_number(parameters.get("qff_tax_rate"), digits=6)),
         ("QFF multiplier", fmt_number(parameters.get("qff_contract_multiplier"))),

@@ -95,16 +95,50 @@ def load_frame(
         trades[column] = pd.to_datetime(trades[column], utc=True).dt.tz_convert(
             TAIPEI_TZ
         )
+    # Crossing cost is the price paid for taking both books, so it is real cash
+    # out of both accounts -- at the measured 0.2151 displacement it is ~43 bps
+    # round trip, several times the commission schedule, and dropping it made
+    # the simulated balances drift high and understate margin-call risk. The
+    # trade row carries only the combined figure (the displacement bundles the
+    # CCF tick and the UMC cent into one number), so it is split evenly; that is
+    # an assumption about attribution, not about the total.
+    crossing_split = 0.5
+    has_crossing = "entry_crossing_cost_twd" in trades.columns
+    if not has_crossing and len(trades):
+        print(
+            "WARNING: trades file predates crossing-cost accounting; "
+            "book-crossing cash is not modelled"
+        )
     idx_of = {t: i for i, t in enumerate(df["timestamp"])}
     for _, row in trades.iterrows():
         i = idx_of.get(row["entry_time"])
         j = idx_of.get(row["exit_time"])
+        entry_cross = float(row["entry_crossing_cost_twd"]) if has_crossing else 0.0
+        exit_cross = float(row["exit_crossing_cost_twd"]) if has_crossing else 0.0
         if i is not None:
-            df.loc[i, "fee_binance"] += row["entry_tsm_fee_twd"]
-            df.loc[i, "fee_fubon"] += row["entry_qff_fee_twd"] + row["entry_qff_tax_twd"]
+            df.loc[i, "fee_binance"] += row["entry_tsm_fee_twd"] + entry_cross * crossing_split
+            df.loc[i, "fee_fubon"] += (
+                row["entry_qff_fee_twd"]
+                + row["entry_qff_tax_twd"]
+                + entry_cross * (1.0 - crossing_split)
+            )
         if j is not None:
-            df.loc[j, "fee_binance"] += row["exit_tsm_fee_twd"]
-            df.loc[j, "fee_fubon"] += row["exit_qff_fee_twd"] + row["exit_qff_tax_twd"]
+            df.loc[j, "fee_binance"] += row["exit_tsm_fee_twd"] + exit_cross * crossing_split
+            df.loc[j, "fee_fubon"] += (
+                row["exit_qff_fee_twd"]
+                + row["exit_qff_tax_twd"]
+                + exit_cross * (1.0 - crossing_split)
+            )
+    # The split is an attribution choice; the total is not. Prove nothing was
+    # dropped on the way into the two buckets.
+    if len(trades):
+        modelled = float(df["fee_binance"].sum() + df["fee_fubon"].sum())
+        booked = float(trades["total_fee_twd"].sum()) if has_crossing else None
+        if booked is not None and modelled > booked + 1e-6:
+            raise RuntimeError(
+                f"Broker fee split {modelled:.2f} exceeds booked trade cost "
+                f"{booked:.2f}"
+            )
     return df
 
 
@@ -299,6 +333,15 @@ def main(argv: list[str]) -> int:
 
     df = load_frame(args.zscore_path, args.equity_path, args.trades_path)
     windows = window_excursions(df)
+    if windows.empty:
+        # An empty frame has no columns, so every downstream access raises a
+        # bare KeyError instead of saying what went wrong. The usual cause is a
+        # bar grid whose sessions never cover ARRIVAL_HOUR.
+        raise RuntimeError(
+            f"No decision points found in {args.zscore_path}: no bar sits at "
+            f"{ARRIVAL_HOUR:02d}:00 Taipei on any session. This simulation is "
+            "built for a session grid that spans the funding arrival hour."
+        )
     print(f"decision points: {len(windows)} ({int(windows['friday'].sum())} Fridays)")
     stats = {}
     for column, label in [

@@ -115,6 +115,15 @@ tsm_units = actual_leg_notional_twd / entry_tsm_twd_fair_open
 
 若 `qff_contracts == 0`，該次 entry 取消。
 
+`--qff-lots N`（N > 0）改成固定口數：`qff_contracts = N`，`leg_notional_twd` 不再參與 sizing，
+其餘三行不變（名目仍由實際口數反推，TSM 腿照樣對齊）。`raw_qff_contracts` 在兩種模式下都維持
+上式的名目分數，這樣「四捨五入偏移」這欄在固定口數模式下才不會變成恆等於口數。summary 的
+`parameters.sizing_mode` 會記錄實際生效的是 `notional` 還是 `fixed_lots`。
+
+實盤送的是固定口數，因此兩種模式的成本結構不同：**按口計價的費用**會線性放大、在比較中互相抵消，
+**每筆最低手續費**不會 —— 它是固定成本攤在較小的部位上。要掃參數就用實際會下的口數掃，
+grid search 也支援 `--qff-lots`。
+
 預設成本：
 
 ```text
@@ -125,6 +134,17 @@ qff_contract_multiplier = 100
 ```
 
 QFF 單邊手續費 88 TWD/口，來回 88×2 = 176；加上來回交易稅（每邊約 5，合計約 10），單口來回總交易成本約 88×2 + 10 = 186 TWD。
+
+`--qff-fee-bps B`（B > 0）改成按契約名目計價，**取代**上面的固定金額。兩者不能直接換算：
+bps 是「價格 × 乘數」的比例，所以固定 88 TWD 在 10,000 TWD 的契約上等於 88 bps，
+在 100,000 TWD 的契約上只有 8.8 bps。換算時務必以實際交易的契約名目為準。
+`parameters.qff_fee_mode` 會記錄實際生效的是 `flat` 還是 `bps`。
+
+`--executable-displacement D`（D > 0）改用可成交價評分：每根 bar 的門檻位移 `D / spread_std`，
+同時每邊收取 `D/100 × 腿名目` 的過價成本（`crossing_cost_twd`）。這兩件事是同一個修正的兩半
+（位移決定何時進場，收費把 mid 成交價換算成可成交價），不是重複計算。此模式需要輸入檔具備
+`spread_std*` 欄位；另外 `--frozen-mean-exit` 與 `--drift-bail-c` 直接比較 spread 絕對水準、
+沒有對應的位移基準，會被明確拒絕而不是混用兩套定價。
 
 手續費與交易稅都是單邊成本，entry 與 exit 各扣一次：
 

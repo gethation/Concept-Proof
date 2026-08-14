@@ -77,7 +77,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--exit-z",
         type=parse_float_list,
         default=DEFAULT_EXIT_Z,
-        help=f"Comma-separated exit z thresholds. Default: {format_float_list(DEFAULT_EXIT_Z)}",
+        help=(
+            "Comma-separated exit z thresholds. Default: "
+            f"{format_float_list(DEFAULT_EXIT_Z)}. Negative values are "
+            "same-side exits and must be written as --exit-z=-1,-0.5,0 -- with "
+            "a space, argparse reads the leading minus as another option and "
+            "fails with \"expected one argument\"."
+        ),
     )
     parser.add_argument("--summary-out", type=Path, default=DEFAULT_SUMMARY_PATH)
     parser.add_argument("--report-out", type=Path, default=DEFAULT_REPORT_PATH)
@@ -89,6 +95,40 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--qff-fee-per-contract-twd",
         type=float,
         default=backtest.DEFAULT_QFF_FEE_PER_CONTRACT_TWD,
+    )
+    parser.add_argument(
+        "--qff-fee-bps",
+        type=float,
+        default=0.0,
+        help=(
+            "Charge the QFF/CCF-leg commission as bps of contract notional "
+            "instead of the flat per-contract rate (0 = flat schedule). Not "
+            "interchangeable at face value: the flat 88 TWD is 88 bps on a "
+            "10,000 TWD contract but 8.8 bps on a 100,000 TWD one."
+        ),
+    )
+    parser.add_argument(
+        "--qff-lots",
+        type=int,
+        default=0,
+        help=(
+            "Trade exactly this many futures contracts per entry, ignoring "
+            "--leg-notional-twd. 0 keeps notional sizing. Sweep at the lot "
+            "count you actually trade: a per-order minimum does not amortise "
+            "linearly, so a notional-sized grid ranks cells differently from "
+            "the fixed-lot run it is meant to justify."
+        ),
+    )
+    parser.add_argument(
+        "--executable-displacement",
+        type=float,
+        default=0.0,
+        help=(
+            "Score every cell on the executable side of both books instead of "
+            "at mid, as the live system does. Half the round-trip book width in "
+            "spread units; 0 (default) keeps mid pricing. See "
+            "backtest_pair_strategy_1m.py --executable-displacement."
+        ),
     )
     parser.add_argument("--qff-tax-rate", type=float, default=backtest.DEFAULT_QFF_TAX_RATE)
     parser.add_argument(
@@ -127,17 +167,34 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 
 def make_params(args: argparse.Namespace, entry_z: float, exit_z: float) -> backtest.BacktestParams:
-    return backtest.BacktestParams(
-        entry_z=entry_z,
-        exit_z=exit_z,
-        leg_notional_twd=args.leg_notional_twd,
-        initial_capital_twd=args.initial_capital_twd,
-        max_entry_delay_minutes=args.max_entry_delay_minutes,
-        tsm_fee_bps=args.tsm_fee_bps,
-        qff_fee_per_contract_twd=args.qff_fee_per_contract_twd,
-        qff_tax_rate=args.qff_tax_rate,
-        qff_contract_multiplier=args.qff_contract_multiplier,
-    )
+    # Field-by-name, so every knob this parser defines reaches the engine and
+    # no second list has to be kept in step. entry_z/exit_z come from the sweep,
+    # not from args (where they are the lists being swept).
+    return backtest.params_from_args(args, entry_z=entry_z, exit_z=exit_z)
+
+
+def sweep_cells(
+    args: argparse.Namespace,
+) -> tuple[list[tuple[float, float]], list[str]]:
+    """(runnable (entry_z, exit_z) pairs, one note per pair dropped as illegal).
+
+    Sweeping same-side exits puts genuinely degenerate corners in the grid, but
+    the grid asks validate_params whether a cell is constructible rather than
+    restating one of its rules here. A second copy of the exit_z inequality is
+    exactly what silently dropped the legal exit_z == -entry_z boundary cells
+    from earlier sweeps, and it would drift again the next time a rule changes.
+    """
+    cells: list[tuple[float, float]] = []
+    dropped: list[str] = []
+    for entry_z in args.entry_z:
+        for exit_z in args.exit_z:
+            try:
+                backtest.validate_params(make_params(args, entry_z, exit_z))
+            except RuntimeError as exc:
+                dropped.append(f"entry_z={entry_z:g}, exit_z={exit_z:g}: {exc}")
+                continue
+            cells.append((entry_z, exit_z))
+    return cells, dropped
 
 
 def calculate_daily_return_stats(
@@ -218,6 +275,7 @@ def result_row(
         "exposure_minutes",
         "exposure_ratio",
         "total_fee_twd",
+        "total_crossing_cost_twd",
         "start",
         "end",
     ]
@@ -261,8 +319,17 @@ def run_grid(args: argparse.Namespace) -> pd.DataFrame:
         if args.seed_spread_path is not None
         else None
     )
+    cells, dropped = sweep_cells(args)
+    for note in dropped:
+        print(f"Dropped cell {note}")
+    if not cells:
+        raise RuntimeError(
+            "Every entry_z/exit_z combination was rejected as degenerate; "
+            "nothing to sweep"
+        )
+
     rows: list[dict[str, Any]] = []
-    total = len(args.windows) * len(args.entry_z) * len(args.exit_z)
+    total = len(args.windows) * len(cells)
     completed = 0
 
     for window in args.windows:
@@ -275,39 +342,38 @@ def run_grid(args: argparse.Namespace) -> pd.DataFrame:
             usdttwd_ohlcv_path=args.usdttwd_ohlcv,
         )
 
-        for entry_z in args.entry_z:
-            for exit_z in args.exit_z:
-                params = make_params(args, entry_z=entry_z, exit_z=exit_z)
-                result = backtest.run_backtest(backtest_frame, params)
-                daily_stats = calculate_daily_return_stats(
-                    result.equity,
-                    initial_capital_twd=args.initial_capital_twd,
-                    annual_trading_days=args.annual_trading_days,
+        for entry_z, exit_z in cells:
+            params = make_params(args, entry_z=entry_z, exit_z=exit_z)
+            result = backtest.run_backtest(backtest_frame, params)
+            daily_stats = calculate_daily_return_stats(
+                result.equity,
+                initial_capital_twd=args.initial_capital_twd,
+                annual_trading_days=args.annual_trading_days,
+            )
+            rows.append(
+                result_row(
+                    ma_window=window,
+                    entry_z=entry_z,
+                    exit_z=exit_z,
+                    zscore_valid_rows=zscore_valid_rows,
+                    daily_stats=daily_stats,
+                    min_sharpe_trades=args.min_sharpe_trades,
+                    summary=result.summary,
                 )
-                rows.append(
-                    result_row(
-                        ma_window=window,
-                        entry_z=entry_z,
-                        exit_z=exit_z,
-                        zscore_valid_rows=zscore_valid_rows,
-                        daily_stats=daily_stats,
-                        min_sharpe_trades=args.min_sharpe_trades,
-                        summary=result.summary,
-                    )
-                )
-                completed += 1
-                sharpe_text = (
-                    f"{daily_stats['sharpe_ratio']:.4f}"
-                    if daily_stats["sharpe_ratio"] is not None
-                    else "-"
-                )
-                print(
-                    "Completed "
-                    f"{completed}/{total}: window={window}, "
-                    f"entry_z={entry_z:g}, exit_z={exit_z:g}, "
-                    f"net_pnl={result.summary['net_pnl_twd']:.2f}, "
-                    f"sharpe={sharpe_text}"
-                )
+            )
+            completed += 1
+            sharpe_text = (
+                f"{daily_stats['sharpe_ratio']:.4f}"
+                if daily_stats["sharpe_ratio"] is not None
+                else "-"
+            )
+            print(
+                "Completed "
+                f"{completed}/{total}: window={window}, "
+                f"entry_z={entry_z:g}, exit_z={exit_z:g}, "
+                f"net_pnl={result.summary['net_pnl_twd']:.2f}, "
+                f"sharpe={sharpe_text}"
+            )
 
     frame = pd.DataFrame(rows)
     frame["rank_net_pnl"] = (
@@ -331,9 +397,8 @@ def run_grid(args: argparse.Namespace) -> pd.DataFrame:
     ).reset_index(drop=True)
     frame.insert(0, "rank", range(1, len(frame) + 1))
     frame.insert(1, "rank_sharpe", frame["rank"])
-    expected_rows = total
-    if len(frame) != expected_rows:
-        raise RuntimeError(f"Expected {expected_rows} grid rows, got {len(frame)}")
+    if len(frame) != total:
+        raise RuntimeError(f"Expected {total} grid rows, got {len(frame)}")
     return frame
 
 
