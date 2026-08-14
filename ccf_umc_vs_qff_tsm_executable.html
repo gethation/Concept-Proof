@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CCF/UMC vs QFF/TSM — 可成交訊號下的全面比較</title>
+<style>
+  :root { color-scheme: light; --bg:#f7f8fa; --panel:#fff; --text:#17202a; --muted:#657282;
+           --line:#d8dee6; --positive:#087f5b; --negative:#c92a2a; --warn:#a8760a; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); line-height:1.55;
+          font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",
+                      "Noto Sans TC","Microsoft JhengHei",sans-serif; }
+  main { max-width:1240px; margin:0 auto; padding:24px; }
+  h1 { margin:0 0 6px; font-size:28px; }
+  h2 { margin:32px 0 12px; font-size:19px; }
+  h3 { margin:18px 0 8px; font-size:14px; color:var(--muted); }
+  .subtitle { color:var(--muted); margin-bottom:18px; }
+  .cards { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; margin:18px 0 24px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:14px; }
+  .label { color:var(--muted); font-size:12px; text-transform:uppercase; }
+  .value { display:block; margin-top:8px; font-size:23px; font-weight:700; }
+  .subvalue { color:var(--muted); font-size:13px; margin-top:4px; }
+  table { width:100%; border-collapse:collapse; background:var(--panel); border:1px solid var(--line); }
+  th,td { padding:8px 10px; border-bottom:1px solid var(--line); text-align:right; white-space:nowrap; }
+  th { background:#eef2f6; color:#344054; font-size:12px; font-weight:650; }
+  th:first-child, td:first-child { text-align:left; }
+  tr:last-child td { border-bottom:0; }
+  tr.pick td { background:#f4fbf8; }
+  .positive { color:var(--positive); font-weight:650; }
+  .negative { color:var(--negative); font-weight:650; }
+  .tag { color:var(--muted); font-size:11px; font-weight:600; }
+  .neutral { color:var(--muted); font-size:13px; }
+  .table-wrap { overflow-x:auto; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:16px 18px; }
+  .note { border-left:3px solid var(--warn); background:#fffaf0; padding:12px 16px; margin:14px 0;
+           border-radius:0 6px 6px 0; }
+  .note.bad { border-left-color:var(--negative); background:#fff5f5; }
+  .note.good { border-left-color:var(--positive); background:#f4fbf8; }
+  code { background:#eef2f6; padding:1px 5px; border-radius:4px; font-size:0.92em; }
+  ul,ol { margin:8px 0 8px 20px; padding:0; } li { margin:5px 0; }
+  @media (max-width:900px) { main { padding:16px; } .cards { grid-template-columns:repeat(2,1fr); } }
+</style>
+</head>
+<body>
+<main>
+  <h1>CCF/UMC vs QFF/TSM — 可成交訊號下的全面比較</h1>
+  <div class="subtitle">
+    產出 2026-08-13 00:25 +0800．兩邊都用 <code>long_z / short_z</code> 可成交訊號機制，
+    各自以<b>實測的簿寬</b>計價（CCF/UMC 單邊 0.2151、QFF/TSM 單邊 0.0755 spread 單位）．
+    共同視窗 <b>2026-07-06 → 08-12</b>（CCF/UMC 26 個 session、QFF/TSM 31 個）．
+    兩邊皆 1m、種子暖機（零 warmup）、每腿 1,000,000 TWD、本金 2,000,000 TWD．
+    網格各 100 格：window {390,780,1560,2500,3900} × entry {0.75,1,1.5,2,2.5} × exit {−0.25,0,0.25,0.5}．
+  </div>
+
+  <section class="cards">
+    <div class="card"><div class="label">CCF/UMC 最佳</div>
+      <span class="value">8.60</span>
+      <div class="subvalue">w2500/e0.75/x0.5．淨利 216,134（10.8%）</div></div>
+    <div class="card"><div class="label">QFF/TSM 最佳</div>
+      <span class="value">4.17</span>
+      <div class="subvalue">w2500/e1.5/x0.5．淨利 93,901（4.7%）</div></div>
+    <div class="card"><div class="label">網格正報酬比例</div>
+      <span class="value">100% / 65%</span>
+      <div class="subvalue">CCF/UMC 100 格全正；QFF/TSM 65 格</div></div>
+    <div class="card"><div class="label">兩者日報酬相關</div>
+      <span class="value">0.08</span>
+      <div class="subvalue">50/50 混合 Sharpe 8.80（32 個共同交易日）</div></div>
+  </section>
+
+  <h2>1. 資料更新</h2>
+  <div class="panel"><ul>
+    <li><b>CCF 1m</b> 累積到 2026-08-12（32,387 根、45 個 session day）。</li>
+    <li><b>QFF 1m</b> 新建累積檔並與舊檔合併：<b>49,890 根、73 個 session day、2026-05-15 → 08-12</b>。</li>
+    <li><b>UMC 1m</b>：IBKR 匯出仍止於 07-24，其後 14 個 session 由 tvdatafeed 補（重疊區收盤價中位差 0.000、相關 0.999986）。
+        <b>這是目前最大的資料弱點</b> —— 樣本尾端有三週完全不是 IBKR 來源。</li>
+    <li><b>TSM perp / USDT-TWD 1m</b>：Binance 與 BitoPro 重抓，2026-05-15 → 08-12 各 127,940 根。</li>
+    <li>tvdatafeed 的 5m/15m/1h 檔案全部以 append-merge 延伸到 08-13（不覆寫、不截斷歷史）。</li>
+  </ul></div>
+
+  <h2>2. 為什麼視窗從 2026-07-06 開始：QFF 的跳動單位變了</h2>
+  <div class="note bad">
+    從 TAIFEX 逐筆資料量到 —— <b>QFF 的最小價格間隔在 2026-07-05 由 5 TWD 變成 1 TWD</b>
+    （最後一個 5 元網格的 session 是 07-03，第一個 1 元網格是 07-05；42 個 session 為 5、30 個為 1）。
+    以價位 2,398 計，這是<b>跨價差成本從 20.9 bps 降到 4.2 bps，少了五分之四</b>。
+    橫跨這個斷點用單一簿寬計價會嚴重誤導 QFF/TSM，所以比較從斷點之後開始。CCF 的跳動單位在整段期間沒有變。
+  </div>
+
+  <h2>3. 四條腿的簿寬實測</h2>
+  <div class="table-wrap"><table>
+    <tr><th>腿</th><th>一檔</th><th>價位</th><th>= bps</th><th>簿寬證據</th><th>深度 vs 本策略單量</th></tr>
+    <tr><td>CCF（TAIFEX UMC 股票期貨）</td><td>0.5 TWD</td><td>131</td><td>38.1</td><td style='text-align:left'>98.2% 為一檔（實測 live 簿）</td><td style='text-align:left'>3–5 口，從未超過最佳檔位</td></tr><tr><td>UMC ADR（NYSE）</td><td>0.01 USD</td><td>20.6</td><td>4.85</td><td style='text-align:left'>99.9% 為一美分</td><td style='text-align:left'>約 4% 的時間最佳檔量 &lt; 一手</td></tr><tr><td>QFF（TAIFEX 台積電股票期貨）</td><td>1 TWD<br><span class='tag'>2026-07-05 前為 5 TWD</span></td><td>2,398</td><td>4.17<br><span class='tag'>先前 20.9</span></td><td style='text-align:left'>由成交價格網格推得</td><td style='text-align:left'>3–5 口</td></tr><tr><td>TSM perp（Binance）</td><td>0.03 USD</td><td>430</td><td>0.70</td><td style='text-align:left'>觸價極窄</td><td style='text-align:left'><b>最佳檔僅 86–602 USD；50 檔總量 3.1 萬 USD</b></td></tr>
+  </table></div>
+  <p>單邊位移 = 兩腿半價差之和：<b>CCF/UMC = (19.05 + 2.43) bps = 0.2148</b>、
+     <b>QFF/TSM = (2.09 + 5.46) bps = 0.0755</b> spread 單位。
+     來回分別是 <b>43.0 bps</b> 與 <b>15.1 bps</b> —— CCF/UMC 的跨價差成本是 QFF/TSM 的 <b>2.8 倍</b>。</p>
+  <div class="note bad">
+    <b>但 TSM perp 有一個 CCF/UMC 沒有的問題：吃不下。</b>
+    它的觸價只有 0.70 bps，可是最佳檔位金額只有 86–602 USD，而本策略一腿是 31,447 USD。
+    實際走簿：<b>買進吃掉 7.19 bps、賣出 3.73 bps</b>，是觸價的 10–20 倍；
+    而且 50 檔的總掛量只有 3.1 萬 USD —— <b>一筆單就吃光整個可見賣方簿</b>。
+    上面 QFF/TSM 用的 5.46 bps 已經是這個走簿成本，仍屬樂觀（沒有計入衝擊後的價格移動）。
+    CCF 與 UMC ADR 則都吃得下：CCF 從未低於一口、UMC 只有約 4% 的時間最佳檔量不足一手。
+  </div>
+
+  <h2>4. 同視窗、同機制的正面對決</h2>
+  <div class="table-wrap"><table>
+    <tr><th>組合</th><th>筆數</th><th>勝率</th><th>Sharpe</th><th>年化</th><th>淨利 TWD</th>
+        <th>最大回撤</th><th>報酬/回撤</th><th>曝險</th><th>淨利/曝險</th>
+        <th>每口檔數</th><th>跨價差佔成本</th><th>持倉中位 h</th></tr>
+    <tr class=''><td>CCF/UMC<br><span class='tag'>w390/e2/x0.5　最佳 Sharpe</span></td><td>30</td><td>83%</td><td><b>9.91</b></td><td>84%</td><td class='positive'>167,124</td><td class='negative'>-1.49%</td><td>5.61</td><td>29%</td><td>574,107</td><td>1.4</td><td>78%</td><td>4.9</td></tr><tr class='pick'><td>CCF/UMC<br><span class='tag'>w2500/e0.75/x0.5　最高淨利</span></td><td>23</td><td>96%</td><td><b>8.60</b></td><td>109%</td><td class='positive'>216,134</td><td class='negative'>-2.09%</td><td>5.16</td><td>79%</td><td>272,011</td><td>2.5</td><td>78%</td><td>23.0</td></tr><tr class=''><td>CCF/UMC<br><span class='tag'>w1560/e1.5/x0.5</span></td><td>16</td><td>94%</td><td><b>7.94</b></td><td>96%</td><td class='positive'>191,629</td><td class='negative'>-2.13%</td><td>4.51</td><td>68%</td><td>280,007</td><td>3.4</td><td>78%</td><td>25.1</td></tr><tr class=''><td>QFF/TSM<br><span class='tag'>w2500/e2/x0　最佳可用 Sharpe</span></td><td>12</td><td>83%</td><td><b>4.72</b></td><td>39%</td><td class='positive'>79,231</td><td class='negative'>-1.36%</td><td>2.92</td><td>25%</td><td>312,140</td><td>19.6</td><td>46%</td><td>16.2</td></tr><tr class=''><td>QFF/TSM<br><span class='tag'>w2500/e1.5/x0.5　最高淨利</span></td><td>17</td><td>82%</td><td><b>4.17</b></td><td>46%</td><td class='positive'>93,901</td><td class='negative'>-2.67%</td><td>1.76</td><td>46%</td><td>205,721</td><td>21.6</td><td>46%</td><td>15.4</td></tr><tr class=''><td>QFF/TSM<br><span class='tag'>w3900/e2.5/x0　僅 6 筆，不可用</span></td><td>6</td><td>100%</td><td><b>6.68</b></td><td>37%</td><td class='positive'>75,358</td><td class='negative'>-1.03%</td><td>3.66</td><td>22%</td><td>349,243</td><td>37.5</td><td>46%</td><td>29.4</td></tr>
+  </table></div>
+  <div class="note good">
+    <b>同一段期間，CCF/UMC 的淨利是 QFF/TSM 的 2.3 倍（216,134 vs 93,901），Sharpe 是 2.1 倍（8.60 vs 4.17）。</b>
+    兩者的費用佔毛利比例幾乎相同（36.7% vs 36.5%），所以差距不在成本 —— 是<b>價差本身的可獲利幅度</b>不同。
+  </div>
+  <p><b>一個反直覺的細節：QFF/TSM 的每口淨利是 21.6 個跳動點，CCF/UMC 只有 2.5 個。</b>
+     QFF 的跳動單位縮小後，它的微結構顧慮幾乎消失；CCF 仍然貼著跳動點在做。
+     但這只說明 QFF/TSM 的獲利「比較乾淨」，不代表比較多。</p>
+
+  <h2>5. 網格穩健度：差距比單一最佳值更大</h2>
+  <div class="panel"><svg viewBox="0 0 1160 300" width="100%" role="img" aria-label="distribution of Sharpe across the 100 grid cells for each pair"><line x1="58" y1="254.0" x2="960" y2="254.0" stroke="#e6eaef"/><text x="50" y="258.0" font-size="11" fill="#657282" text-anchor="end">0</text><line x1="58" y1="196.0" x2="960" y2="196.0" stroke="#e6eaef"/><text x="50" y="200.0" font-size="11" fill="#657282" text-anchor="end">9</text><line x1="58" y1="138.0" x2="960" y2="138.0" stroke="#e6eaef"/><text x="50" y="142.0" font-size="11" fill="#657282" text-anchor="end">18</text><line x1="58" y1="80.0" x2="960" y2="80.0" stroke="#e6eaef"/><text x="50" y="84.0" font-size="11" fill="#657282" text-anchor="end">27</text><line x1="58" y1="22.0" x2="960" y2="22.0" stroke="#e6eaef"/><text x="50" y="26.0" font-size="11" fill="#657282" text-anchor="end">36</text><line x1="122.5" y1="22" x2="122.5" y2="254" stroke="#e6eaef"/><text x="122.5" y="276" font-size="11" fill="#657282" text-anchor="middle">-15</text><line x1="189.7" y1="22" x2="189.7" y2="254" stroke="#e6eaef"/><text x="189.7" y="276" font-size="11" fill="#657282" text-anchor="middle">-13</text><line x1="257.0" y1="22" x2="257.0" y2="254" stroke="#e6eaef"/><text x="257.0" y="276" font-size="11" fill="#657282" text-anchor="middle">-11</text><line x1="324.2" y1="22" x2="324.2" y2="254" stroke="#e6eaef"/><text x="324.2" y="276" font-size="11" fill="#657282" text-anchor="middle">-9</text><line x1="391.4" y1="22" x2="391.4" y2="254" stroke="#e6eaef"/><text x="391.4" y="276" font-size="11" fill="#657282" text-anchor="middle">-7</text><line x1="458.7" y1="22" x2="458.7" y2="254" stroke="#e6eaef"/><text x="458.7" y="276" font-size="11" fill="#657282" text-anchor="middle">-5</text><line x1="525.9" y1="22" x2="525.9" y2="254" stroke="#e6eaef"/><text x="525.9" y="276" font-size="11" fill="#657282" text-anchor="middle">-3</text><line x1="593.1" y1="22" x2="593.1" y2="254" stroke="#e6eaef"/><text x="593.1" y="276" font-size="11" fill="#657282" text-anchor="middle">-1</text><line x1="660.4" y1="22" x2="660.4" y2="254" stroke="#e6eaef"/><text x="660.4" y="276" font-size="11" fill="#657282" text-anchor="middle">1</text><line x1="727.6" y1="22" x2="727.6" y2="254" stroke="#e6eaef"/><text x="727.6" y="276" font-size="11" fill="#657282" text-anchor="middle">3</text><line x1="794.8" y1="22" x2="794.8" y2="254" stroke="#e6eaef"/><text x="794.8" y="276" font-size="11" fill="#657282" text-anchor="middle">5</text><line x1="862.1" y1="22" x2="862.1" y2="254" stroke="#e6eaef"/><text x="862.1" y="276" font-size="11" fill="#657282" text-anchor="middle">7</text><line x1="929.3" y1="22" x2="929.3" y2="254" stroke="#e6eaef"/><text x="929.3" y="276" font-size="11" fill="#657282" text-anchor="middle">9</text><text x="509" y="295" font-size="12" fill="#657282" text-anchor="middle">Sharpe（100 個參數組合各一格）</text><rect x="599.2" y="247.6" width="19.8" height="6.4" fill="#087f5b" opacity="0.8"/><rect x="644.3" y="228.4" width="19.8" height="25.6" fill="#087f5b" opacity="0.8"/><rect x="689.4" y="241.2" width="19.8" height="12.8" fill="#087f5b" opacity="0.8"/><rect x="734.5" y="126.2" width="19.8" height="127.8" fill="#087f5b" opacity="0.8"/><rect x="779.6" y="94.2" width="19.8" height="159.8" fill="#087f5b" opacity="0.8"/><rect x="824.7" y="43.1" width="19.8" height="210.9" fill="#087f5b" opacity="0.8"/><rect x="869.8" y="177.3" width="19.8" height="76.7" fill="#087f5b" opacity="0.8"/><rect x="914.9" y="234.8" width="19.8" height="19.2" fill="#087f5b" opacity="0.8"/><rect x="78.3" y="247.6" width="19.8" height="6.4" fill="#1c7ed6" opacity="0.8"/><rect x="168.5" y="247.6" width="19.8" height="6.4" fill="#1c7ed6" opacity="0.8"/><rect x="213.6" y="247.6" width="19.8" height="6.4" fill="#1c7ed6" opacity="0.8"/><rect x="258.7" y="247.6" width="19.8" height="6.4" fill="#1c7ed6" opacity="0.8"/><rect x="303.8" y="247.6" width="19.8" height="6.4" fill="#1c7ed6" opacity="0.8"/><rect x="348.9" y="234.8" width="19.8" height="19.2" fill="#1c7ed6" opacity="0.8"/><rect x="394.0" y="241.2" width="19.8" height="12.8" fill="#1c7ed6" opacity="0.8"/><rect x="439.1" y="222.0" width="19.8" height="32.0" fill="#1c7ed6" opacity="0.8"/><rect x="484.2" y="222.0" width="19.8" height="32.0" fill="#1c7ed6" opacity="0.8"/><rect x="529.3" y="234.8" width="19.8" height="19.2" fill="#1c7ed6" opacity="0.8"/><rect x="574.4" y="215.7" width="19.8" height="38.3" fill="#1c7ed6" opacity="0.8"/><rect x="619.5" y="190.1" width="19.8" height="63.9" fill="#1c7ed6" opacity="0.8"/><rect x="664.6" y="145.3" width="19.8" height="108.7" fill="#1c7ed6" opacity="0.8"/><rect x="709.7" y="113.4" width="19.8" height="140.6" fill="#1c7ed6" opacity="0.8"/><rect x="754.8" y="132.6" width="19.8" height="121.4" fill="#1c7ed6" opacity="0.8"/><rect x="799.9" y="247.6" width="19.8" height="6.4" fill="#1c7ed6" opacity="0.8"/><rect x="845.0" y="241.2" width="19.8" height="12.8" fill="#1c7ed6" opacity="0.8"/><rect x="978" y="42" width="16" height="10" fill="#087f5b" opacity="0.8"/><text x="1002" y="52" font-size="12" fill="#344054" font-weight="650">CCF/UMC</text><text x="1002" y="67" font-size="11" fill="#657282">中位 5.82</text><rect x="978" y="88" width="16" height="10" fill="#1c7ed6" opacity="0.8"/><text x="1002" y="98" font-size="12" fill="#344054" font-weight="650">QFF/TSM</text><text x="1002" y="113" font-size="11" fill="#657282">中位 1.55</text></svg></div>
+  <div class="table-wrap"><table>
+    <tr><th>配對</th><th>格數</th><th>正報酬</th><th>Sharpe &gt; 3</th><th>Sharpe 中位</th><th>Sharpe p90</th>
+        <th>淨利中位</th><th>交易數中位</th><th>跨價差佔成本中位</th></tr>
+    <tr><td>CCF/UMC</td><td>100</td><td class='positive'>100／100</td><td>93</td><td><b>5.82</b></td><td>7.55</td><td>118,032</td><td>20</td><td>78%</td></tr><tr><td>QFF/TSM</td><td>100</td><td class=''>65／100</td><td>26</td><td><b>1.55</b></td><td>3.80</td><td>27,395</td><td>26</td><td>46%</td></tr>
+  </table></div>
+  <p><b>CCF/UMC 的 100 格<u>全部</u>為正、93 格 Sharpe 大於 3、中位 Sharpe 5.82；
+     QFF/TSM 只有 65 格為正、26 格大於 3、中位 1.55。</b>
+     這比「最佳值誰高」更有意義 —— 它說的是<b>你挑錯參數時會有多慘</b>。
+     CCF/UMC 在這個視窗裡幾乎怎麼挑都賺，QFF/TSM 有三分之一的參數會虧。</p>
+
+  <h2>6. 權益曲線</h2>
+  <div class="panel"><svg viewBox="0 0 1160 472" width="100%" role="img" aria-label="daily equity and drawdown for both pairs on the common window"><line x1="58" y1="294.0" x2="880" y2="294.0" stroke="#e6eaef"/><text x="50" y="298.0" font-size="11" fill="#657282" text-anchor="end">0%</text><line x1="58" y1="238.0" x2="880" y2="238.0" stroke="#e6eaef"/><text x="50" y="242.0" font-size="11" fill="#657282" text-anchor="end">2%</text><line x1="58" y1="182.0" x2="880" y2="182.0" stroke="#e6eaef"/><text x="50" y="186.0" font-size="11" fill="#657282" text-anchor="end">5%</text><line x1="58" y1="126.0" x2="880" y2="126.0" stroke="#e6eaef"/><text x="50" y="130.0" font-size="11" fill="#657282" text-anchor="end">7%</text><line x1="58" y1="70.0" x2="880" y2="70.0" stroke="#e6eaef"/><text x="50" y="74.0" font-size="11" fill="#657282" text-anchor="end">10%</text><line x1="58" y1="14.0" x2="880" y2="14.0" stroke="#e6eaef"/><text x="50" y="18.0" font-size="11" fill="#657282" text-anchor="end">12%</text><line x1="58" y1="320.0" x2="880" y2="320.0" stroke="#e6eaef"/><text x="50" y="324.0" font-size="11" fill="#657282" text-anchor="end">-0.0%</text><line x1="58" y1="360.0" x2="880" y2="360.0" stroke="#e6eaef"/><text x="50" y="364.0" font-size="11" fill="#657282" text-anchor="end">-0.6%</text><line x1="58" y1="400.0" x2="880" y2="400.0" stroke="#e6eaef"/><text x="50" y="404.0" font-size="11" fill="#657282" text-anchor="end">-1.3%</text><line x1="58" y1="440.0" x2="880" y2="440.0" stroke="#e6eaef"/><text x="50" y="444.0" font-size="11" fill="#657282" text-anchor="end">-1.9%</text><line x1="58.0" y1="14" x2="58.0" y2="440" stroke="#eef1f5"/><text x="58.0" y="466" font-size="11" fill="#657282" text-anchor="middle">07/06</text><line x1="213.5" y1="14" x2="213.5" y2="440" stroke="#eef1f5"/><text x="213.5" y="466" font-size="11" fill="#657282" text-anchor="middle">07/13</text><line x1="369.0" y1="14" x2="369.0" y2="440" stroke="#eef1f5"/><text x="369.0" y="466" font-size="11" fill="#657282" text-anchor="middle">07/20</text><line x1="524.5" y1="14" x2="524.5" y2="440" stroke="#eef1f5"/><text x="524.5" y="466" font-size="11" fill="#657282" text-anchor="middle">07/27</text><line x1="680.1" y1="14" x2="680.1" y2="440" stroke="#eef1f5"/><text x="680.1" y="466" font-size="11" fill="#657282" text-anchor="middle">08/03</text><line x1="835.6" y1="14" x2="835.6" y2="440" stroke="#eef1f5"/><text x="835.6" y="466" font-size="11" fill="#657282" text-anchor="middle">08/10</text><text x="58" y="13" font-size="12" font-weight="650" fill="#344054">累積報酬（2M 本金，已含跨價差成本）</text><text x="58" y="314" font-size="12" font-weight="650" fill="#344054">回撤</text><polyline points="58.0,284.6 80.2,263.7 102.4,254.3 124.6,246.0 146.9,237.6 213.5,231.7 235.7,220.7 257.9,220.3 280.2,196.0 302.4,204.7 324.6,192.1 369.0,206.2 391.2,170.2 413.5,172.1 435.7,166.9 457.9,153.2 480.1,156.3 524.5,137.3 546.8,114.4 569.0,127.9 591.2,108.9 613.4,95.3 635.6,101.4 680.1,119.2 702.3,67.1 724.5,50.6 746.7,50.2 768.9,39.6 791.1,45.2 835.6,35.6 857.8,34.7 880.0,42.1" fill="none" stroke="#087f5b" stroke-width="2.5"/><polyline points="58.0,320.0 80.2,320.0 102.4,320.0 124.6,320.0 146.9,320.0 213.5,320.0 235.7,320.0 257.9,320.0 280.2,320.0 302.4,343.3 324.6,320.0 369.0,357.7 391.2,320.0 413.5,325.0 435.7,320.0 457.9,320.0 480.1,328.2 524.5,320.0 546.8,320.0 569.0,356.4 591.2,320.0 613.4,320.0 635.6,336.4 680.1,384.1 702.3,320.0 724.5,320.0 746.7,320.0 768.9,320.0 791.1,335.0 835.6,320.0 857.8,320.0 880.0,339.8" fill="none" stroke="#087f5b" stroke-width="1.8" opacity="0.85"/><polyline points="58.0,284.6 80.2,256.8 102.4,270.4 124.6,262.4 146.9,256.1 213.5,248.7 235.7,240.6 257.9,255.4 280.2,241.3 302.4,253.4 324.6,244.7 369.0,233.6 391.2,223.0 413.5,219.9 435.7,209.3 457.9,206.4 480.1,201.1 524.5,201.4 546.8,184.6 569.0,166.0 591.2,160.7 613.4,156.6 635.6,153.9 680.1,152.0 702.3,122.6 724.5,114.9 746.7,106.7 768.9,97.5 791.1,94.1 835.6,96.5 857.8,99.3 880.0,99.3" fill="none" stroke="#2b8a3e" stroke-width="1.8"/><polyline points="58.0,320.0 80.2,320.0 102.4,356.3 124.6,334.9 146.9,320.0 213.5,320.0 235.7,320.0 257.9,359.7 280.2,322.0 302.4,354.3 324.6,331.2 369.0,320.0 391.2,320.0 413.5,320.0 435.7,320.0 457.9,320.0 480.1,320.0 524.5,320.8 546.8,320.0 569.0,320.0 591.2,320.0 613.4,320.0 635.6,320.0 680.1,320.0 702.3,320.0 724.5,320.0 746.7,320.0 768.9,320.0 791.1,320.0 835.6,326.6 857.8,333.9 880.0,333.9" fill="none" stroke="#2b8a3e" stroke-width="1.3" opacity="0.85"/><polyline points="58.0,290.8 80.2,259.8 102.4,263.7 124.6,250.6 146.9,250.6 213.5,253.6 235.7,260.6 257.9,291.3 280.2,278.5 302.4,267.0 324.6,262.3 369.0,251.1 391.2,238.7 413.5,261.7 435.7,252.0 457.9,252.5 480.1,252.5 524.5,269.5 546.8,258.8 569.0,235.1 591.2,248.3 613.4,225.3 635.6,225.3 680.1,225.3 702.3,223.6 724.5,215.3 746.7,204.3 768.9,193.2 791.1,193.2 835.6,198.5 857.8,181.6 880.0,184.6" fill="none" stroke="#1c7ed6" stroke-width="1.8"/><polyline points="58.0,320.0 80.2,320.0 102.4,330.5 124.6,320.0 146.9,320.0 213.5,328.1 235.7,346.9 257.9,429.1 280.2,394.9 302.4,363.9 324.6,351.3 369.0,321.5 391.2,320.0 413.5,381.5 435.7,355.5 457.9,356.8 480.1,356.8 524.5,402.2 546.8,373.6 569.0,320.0 591.2,355.3 613.4,320.0 635.6,320.0 680.1,320.0 702.3,320.0 724.5,320.0 746.7,320.0 768.9,320.0 791.1,320.0 835.6,334.1 857.8,320.0 880.0,327.9" fill="none" stroke="#1c7ed6" stroke-width="1.3" opacity="0.85"/><polyline points="58.0,286.6 80.2,270.9 102.4,273.7 124.6,262.6 146.9,262.6 213.5,260.8 235.7,245.9 257.9,267.3 280.2,245.7 302.4,245.7 324.6,245.7 369.0,245.7 391.2,245.7 413.5,263.8 435.7,254.2 457.9,250.9 480.1,250.9 524.5,265.5 546.8,254.8 569.0,240.7 591.2,249.7 613.4,231.7 635.6,231.7 680.1,231.7 702.3,224.1 724.5,218.0 746.7,211.0 768.9,211.0 791.1,211.0 835.6,212.4 857.8,201.7 880.0,201.7" fill="none" stroke="#5f3dc4" stroke-width="1.8"/><polyline points="58.0,320.0 80.2,320.0 102.4,327.4 124.6,320.0 146.9,320.0 213.5,320.0 235.7,320.0 257.9,377.2 280.2,320.0 302.4,320.0 324.6,320.0 369.0,320.0 391.2,320.0 413.5,368.6 435.7,342.9 457.9,334.1 480.1,334.1 524.5,373.2 546.8,344.5 569.0,320.0 591.2,344.0 613.4,320.0 635.6,320.0 680.1,320.0 702.3,320.0 724.5,320.0 746.7,320.0 768.9,320.0 791.1,320.0 835.6,323.9 857.8,320.0 880.0,320.0" fill="none" stroke="#5f3dc4" stroke-width="1.3" opacity="0.85"/><text x="896" y="28" font-size="12" font-weight="650" fill="#344054">組合</text><line x1="896" y1="48" x2="916" y2="48" stroke="#087f5b" stroke-width="2.4"/><text x="922" y="52" font-size="11" fill="#344054">CCF/UMC　w2500 / e0.75 / x0.5</text><text x="922" y="64" font-size="11" fill="#087f5b" font-weight="650">最終 +10.8%</text><line x1="896" y1="76" x2="916" y2="76" stroke="#2b8a3e" stroke-width="2.4"/><text x="922" y="80" font-size="11" fill="#344054">CCF/UMC　w390 / e2.0 / x0.5</text><text x="922" y="92" font-size="11" fill="#2b8a3e" font-weight="650">最終 +8.4%</text><line x1="896" y1="104" x2="916" y2="104" stroke="#1c7ed6" stroke-width="2.4"/><text x="922" y="108" font-size="11" fill="#344054">QFF/TSM　w2500 / e1.5 / x0.5</text><text x="922" y="120" font-size="11" fill="#1c7ed6" font-weight="650">最終 +4.7%</text><line x1="896" y1="132" x2="916" y2="132" stroke="#5f3dc4" stroke-width="2.4"/><text x="922" y="136" font-size="11" fill="#344054">QFF/TSM　w2500 / e2.0 / x0</text><text x="922" y="148" font-size="11" fill="#5f3dc4" font-weight="650">最終 +4.0%</text></svg></div>
+
+  <h2>7. 但兩者幾乎不相關 —— 這才是 QFF/TSM 的價值</h2>
+  <div class="note good">
+    共同的 32 個交易日上，兩者日報酬相關係數只有 <b>0.079</b>。
+    CCF/UMC 單獨 Sharpe 8.60、QFF/TSM 單獨 4.17，
+    <b>50/50 等權混合 8.80</b> —— 比較好的那個單獨跑還要高一點。
+    QFF/TSM 在這個視窗贏不了 CCF/UMC，但它<b>不是同一個賭注</b>：
+    把資金分一部分過去，整體風險調整後報酬不但沒下降，還略升。
+    這和 [[qff-tsm]] 專案先前發現「多視窗集成是唯一打敗 baseline 的東西」是同一個機制。
+  </div>
+
+  <h2>8. 結論</h2>
+  <div class="panel">
+    <p><b>可以說的：</b>在 2026-07-06 → 08-12 這段期間，用完全相同的訊號機制、各自的真實簿寬計價，
+       <b>CCF/UMC 在報酬（2.3×）、風險調整報酬（2.1×）與參數穩健度（100% vs 65% 正報酬）三個面向全面領先</b>。
+       它的優勢不是成本造成的，兩邊的費用佔毛利比例一樣。</p>
+    <p><b>QFF/TSM 保留的三個理由：</b>(1) 相關性只有 0.08，是真正的分散來源；
+       (2) QFF 跳動單位縮小後，它的每筆獲利距離微結構雜訊很遠（21.6 檔 vs 2.5 檔），
+       對「滑價假設出錯」的耐受度高得多；(3) 它的交易時段是 TAIFEX 全日（每天約 13.6 小時），
+       是 CCF/UMC（UMC RTH 6.5 小時）的兩倍，機會密度較高。</p>
+    <p><b>不能說的：</b>「CCF/UMC 比 QFF/TSM 好」這種一般性結論。這是<b>五週、20–30 筆交易</b>的比較，
+       而且是在同一份資料上挑參數。先前的紀錄顯示 QFF/TSM 在 3 月至 6 月上旬表現遠勝於它在 6 月後的表現 ——
+       兩者都會隨區間變動。</p>
+  </div>
+
+  <h2>9. 保留</h2>
+  <div class="note bad"><ul>
+    <li><b>五週、CCF/UMC 26 個 session / QFF/TSM 31 個，各 6–30 筆交易。</b>所有年化數字都是外推。</li>
+    <li><b>同一份資料選參數，沒有樣本外驗證。</b>網格穩健度的比較受此影響較小，但最佳值的比較受影響很大。</li>
+    <li><b>TSM perp 的容量是硬限制。</b>1M TWD 一腿就吃光可見賣方簿；若要放大部位，QFF/TSM 會先撞到深度而不是保證金。</li>
+    <li><b>UMC 1m 樣本尾端三週來自 tvdatafeed 而非 IBKR。</b>重疊區一致，但這段正好涵蓋比較視窗的大部分。</li>
+    <li><b>QFF 的簿寬是從成交價格網格推得，沒有 live 報價驗證</b>（CCF 的同方法有 live 驗證，誤差 0.1pp）。
+        TSM perp 的深度是當下快照，不是歷史分布。</li>
+    <li><b>QFF/TSM 保留週末強平規則、CCF/UMC 移除</b>（兩邊都是各自正確的設定：Binance 週末照跑、TAIFEX 與 NYSE 都休）。
+        這讓兩者的曝險與持倉時間不完全可比。</li>
+  </ul></div>
+</main>
+</body>
+</html>
