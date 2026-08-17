@@ -116,6 +116,7 @@ a{color:var(--accent)}
 .abstract h3{margin:0 0 8px;font-size:11.5px;letter-spacing:.13em;text-transform:uppercase;
  color:var(--accent)}
 .abstract p{margin:0 0 11px}.abstract p:last-child{margin:0}
+.abstract p.ptr{font-size:13px;color:var(--muted);padding-top:9px;border-top:1px solid var(--grid)}
 .callout{background:var(--surface);border:1px solid var(--rule);border-left:3px solid var(--warn);
  border-radius:3px;padding:18px 24px;margin:22px 0}
 .callout h3{margin:0 0 8px;font-size:11.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--warn)}
@@ -674,3 +675,171 @@ def histogram_pair(
 
 def footer(text: str) -> str:
     return f"<footer>{text}</footer>"
+
+
+def trade_anatomy(
+    *,
+    spread: list[float],
+    mean: list[float],
+    std: list[float],
+    z_mid: list[float],
+    z_short: list[float],
+    z_long: list[float],
+    labels: list[str],
+    entry_z: float,
+    exit_z: float,
+    direction: str,
+    events: dict[str, int],
+    aria: str,
+) -> str:
+    """Two stacked panels over one real trade: the spread with its band, and
+    the three z series the engine actually decides on.
+
+    The reason this figure exists is that the spread is not one line. The engine
+    scores each direction against the side of the book that order would have to
+    cross, so there are three series -- the mid, and one displaced each way --
+    and every threshold in the report is applied to the displaced pair, not the
+    mid. That is very hard to convey in prose and immediate in a picture.
+
+    events maps 'entry_signal' / 'entry_fill' / 'exit_signal' / 'exit_fill' to
+    bar indices within the supplied window.
+    """
+    W = 940
+    ml, mr, mt = 62, 118, 26
+    hA, gap, hB, mb = 190, 46, 150, 40
+    H = mt + hA + gap + hB + mb
+    pw = W - ml - mr
+    n = len(spread)
+
+    band_hi = [m + entry_z * s for m, s in zip(mean, std)]
+    band_lo = [m - entry_z * s for m, s in zip(mean, std)]
+    lo_a = min(min(spread), min(band_lo))
+    hi_a = max(max(spread), max(band_hi))
+    pad = (hi_a - lo_a) * 0.12 or 1.0
+    lo_a, hi_a = lo_a - pad, hi_a + pad
+    zs = z_mid + z_short + z_long + [entry_z, -entry_z, exit_z, -exit_z]
+    lo_b, hi_b = min(zs), max(zs)
+    padb = (hi_b - lo_b) * 0.12 or 1.0
+    lo_b, hi_b = lo_b - padb, hi_b + padb
+
+    def sx(i: float) -> float:
+        return ml + (i / max(n - 1, 1)) * pw
+
+    def syA(v: float) -> float:
+        return mt + hA - (v - lo_a) / (hi_a - lo_a) * hA
+
+    def syB(v: float) -> float:
+        return mt + hA + gap + hB - (v - lo_b) / (hi_b - lo_b) * hB
+
+    p: list[str] = []
+
+    def poly(vals, sy, cls, extra=""):
+        pts = " ".join(f"{sx(i):.1f},{sy(v):.1f}" for i, v in enumerate(vals))
+        p.append(f'<polyline points="{pts}" fill="none" class="{cls}" {extra}/>')
+
+    # holding period wash, drawn first so every line sits on top of it
+    a, b = events["entry_fill"], events["exit_fill"]
+    p.append(
+        f'<rect x="{sx(a):.1f}" y="{mt}" width="{sx(b)-sx(a):.1f}" '
+        f'height="{hA}" fill="var(--accent)" opacity="0.05"/>'
+        f'<rect x="{sx(a):.1f}" y="{mt+hA+gap}" width="{sx(b)-sx(a):.1f}" '
+        f'height="{hB}" fill="var(--accent)" opacity="0.05"/>'
+    )
+
+    for t in _nice_ticks(lo_a, hi_a, 3):
+        if lo_a <= t <= hi_a:
+            y = syA(t)
+            p.append(f'<line x1="{ml}" y1="{y:.1f}" x2="{ml+pw}" y2="{y:.1f}" class="grid1"/>')
+            p.append(f'<text x="{ml-10}" y="{y+4:.1f}" class="axis end">{t:.2f}</text>')
+    for t in _nice_ticks(lo_b, hi_b, 4):
+        if lo_b <= t <= hi_b:
+            y = syB(t)
+            p.append(f'<line x1="{ml}" y1="{y:.1f}" x2="{ml+pw}" y2="{y:.1f}" class="grid1"/>')
+            p.append(f'<text x="{ml-10}" y="{y+4:.1f}" class="axis end">{t:+.1f}</text>')
+
+    # panel A: entry band, mean, spread
+    band_pts = (
+        " ".join(f"{sx(i):.1f},{syA(v):.1f}" for i, v in enumerate(band_hi))
+        + " "
+        + " ".join(f"{sx(i):.1f},{syA(v):.1f}" for i, v in reversed(list(enumerate(band_lo))))
+    )
+    p.append(f'<polygon points="{band_pts}" fill="var(--s3)" opacity="0.13"/>')
+    poly(band_hi, syA, "", 'stroke="var(--s3)" stroke-width="1.5" stroke-dasharray="4 3"')
+    poly(band_lo, syA, "", 'stroke="var(--s3)" stroke-width="1.5" stroke-dasharray="4 3"')
+    poly(mean, syA, "", 'stroke="var(--s2)" stroke-width="1.5" stroke-dasharray="5 3"')
+    for vals, txt in ((band_hi, "+entry"), (mean, "mean"), (band_lo, "−entry")):
+        p.append(
+            f'<text x="{ml+pw+7}" y="{syA(vals[-1])+4:.1f}" class="axis start">{esc(txt)}</text>'
+        )
+    poly(spread, syA, "", 'stroke="var(--s1)" stroke-width="2" stroke-linejoin="round"')
+
+    # panel B: the displaced pair with the gap between them washed in, then mid
+    gap_pts = (
+        " ".join(f"{sx(i):.1f},{syB(v):.1f}" for i, v in enumerate(z_long))
+        + " "
+        + " ".join(
+            f"{sx(i):.1f},{syB(v):.1f}" for i, v in reversed(list(enumerate(z_short)))
+        )
+    )
+    p.append(f'<polygon points="{gap_pts}" fill="var(--s1)" opacity="0.10"/>')
+    for lab, series in (("z_long", z_long), ("z_short", z_short)):
+        poly(series, syB, "", 'stroke="var(--s3)" stroke-width="1.5"')
+    poly(z_mid, syB, "", 'stroke="var(--s1)" stroke-width="2" stroke-linejoin="round"')
+
+    for lvl, txt in ((entry_z, f"+entry {entry_z:g}"), (-entry_z, f"−entry {-entry_z:g}")):
+        if lo_b <= lvl <= hi_b:
+            y = syB(lvl)
+            p.append(
+                f'<line x1="{ml}" y1="{y:.1f}" x2="{ml+pw}" y2="{y:.1f}" '
+                f'stroke="var(--s2)" stroke-width="1" stroke-dasharray="4 3"/>'
+                f'<text x="{ml+pw+7}" y="{y+4:.1f}" class="axis start">{esc(txt)}</text>'
+            )
+    for lvl, txt in ((exit_z, f"+exit {exit_z:g}"), (-exit_z, f"−exit {-exit_z:g}")):
+        if lo_b <= lvl <= hi_b:
+            y = syB(lvl)
+            p.append(
+                f'<line x1="{ml}" y1="{y:.1f}" x2="{ml+pw}" y2="{y:.1f}" '
+                f'stroke="var(--muted)" stroke-width="1" stroke-dasharray="2 3"/>'
+                f'<text x="{ml+pw+7}" y="{y+4:.1f}" class="axis start">{esc(txt)}</text>'
+            )
+
+    # Event guides. Signal and fill are one bar apart, so a label on each
+    # overprints; instead each pair gets one label and a shaded one-bar sliver
+    # that shows the lag without needing two pieces of text.
+    short_side = direction == "short_tsm_long_qff"
+    entry_series = z_short if short_side else z_long
+    exit_series = z_long if short_side else z_short
+    pairs = [
+        ("entry_signal", "entry_fill", "進場", entry_series),
+        ("exit_signal", "exit_fill", "出場", exit_series),
+    ]
+    for sig_key, fill_key, lab, series in pairs:
+        i, j = events[sig_key], events[fill_key]
+        x0, x1 = sx(i), sx(j)
+        p.append(
+            f'<rect x="{x0:.1f}" y="{mt}" width="{max(x1-x0,2):.1f}" '
+            f'height="{hA+gap+hB}" fill="var(--s2)" opacity="0.16"/>'
+        )
+        for x in (x0, x1):
+            p.append(
+                f'<line x1="{x:.1f}" y1="{mt}" x2="{x:.1f}" y2="{mt+hA+gap+hB}" '
+                f'stroke="var(--ink2)" stroke-width="1" stroke-dasharray="2 4" opacity="0.75"/>'
+            )
+        p.append(
+            f'<text x="{(x0+x1)/2:.1f}" y="{mt-10}" class="axis mid" '
+            f'style="fill:var(--ink);font-weight:640">{esc(lab)}</text>'
+        )
+        for idx in (i, j):
+            p.append(
+                f'<circle cx="{sx(idx):.1f}" cy="{syA(spread[idx]):.1f}" r="4" '
+                f'fill="var(--s1)" class="ring"/>'
+                f'<circle cx="{sx(idx):.1f}" cy="{syB(series[idx]):.1f}" r="4" '
+                f'fill="var(--s1)" class="ring"/>'
+            )
+
+    p.append(f'<text x="{ml}" y="{mt+12}" class="axist">Spread（% 尺度）</text>')
+    p.append(f'<text x="{ml}" y="{mt+hA+gap-8}" class="axist">z-score</text>')
+    step = max(1, n // 5)
+    for i in range(0, n, step):
+        p.append(f'<text x="{sx(i):.1f}" y="{H-14}" class="axis mid">{esc(labels[i])}</text>')
+    return _svg(W, H, aria, "".join(p))

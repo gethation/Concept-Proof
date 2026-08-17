@@ -59,6 +59,7 @@ class PairSpec:
     segments: list[Segment]
     equity_leg: str
     futures_leg: str
+    legs_zh: str = ""
     extra: str = ""
     _cache: dict = field(default_factory=dict, repr=False)
 
@@ -79,6 +80,7 @@ PAIRS = {
         out=paths.report("ccf_umc_report"),
         equity_leg="UMC ADR",
         futures_leg="CCF",
+        legs_zh="TAIFEX CCF（UMC 股票期貨）與其在 NYSE 掛牌的 UMC ADR",
         segments=[
             Segment(
                 "全期間", None, None, 0.2151,
@@ -102,6 +104,7 @@ PAIRS = {
         out=paths.report("qff_tsm_report"),
         equity_leg="TSM perp",
         futures_leg="QFF",
+        legs_zh="TAIFEX QFF（台積電股票期貨）與 Binance 的 TSMUSDT 永續合約",
         segments=[
             Segment(
                 "tick 變更後", "2026-07-06", None, 0.0755,
@@ -115,7 +118,7 @@ PAIRS = {
             ),
         ],
         extra=(
-            "QFF 的最小跳動單位在 <b>2026-07-05</b> 由 5 TWD 改為 1 TWD，過價成本一次降掉八成。"
+            "QFF 的最小跳動單位在 <b>2026-07-05</b> 由 5 TWD 改為 1 TWD，盤口價差成本一次降掉八成。"
             "單一位移參數跨不過這個斷點，因此本報告以變更後區間為主，變更前區間另列對照。"
         ),
     ),
@@ -255,6 +258,89 @@ def session_equity(equity: pd.DataFrame) -> tuple[list[str], list[float]]:
     return [d.strftime("%m-%d") for d in close.index], [float(v) for v in pct.values]
 
 
+def pick_example_trade(trades: pd.DataFrame) -> pd.Series:
+    """A trade that is typical in outcome and legible on a chart.
+
+    Typical first: the median per-trade return is what the report quotes, so a
+    walk-through of an unusually good trade would teach the mechanism against a
+    misleading example. Legible second: holds that span a session gap compress
+    to nothing on a bar index, so short in-session trades are preferred among
+    the near-median ones.
+    """
+    t = trades.copy()
+    t["bars"] = t["exit_idx"] - t["entry_signal_idx"]
+    compact = t[(t["bars"] <= 80) & (t["hours"] <= 3)]
+    pool = compact if len(compact) else t
+    return pool.iloc[(pool["ret_bps"] - trades["ret_bps"].median()).abs().argsort()].iloc[0]
+
+
+def anatomy_figure(spec, zframe, trades, pick, seg, fignum: int) -> str:
+    ex = pick_example_trade(trades)
+    a, b = int(ex["entry_signal_idx"]), int(ex["exit_idx"])
+    pad = max(8, int((b - a) * 0.45))
+    lo, hi = max(0, a - pad), min(len(zframe) - 1, b + pad)
+    # Clamp the padding at a session boundary. Bars are plotted on an index, so
+    # a window that reaches back over a closed market silently splices days that
+    # are hours apart into adjacent pixels.
+    ts_all = pd.to_datetime(zframe["timestamp"])
+    breaks = ts_all.diff() > pd.Timedelta(minutes=60)
+    prev = breaks.iloc[lo : a + 1]
+    if prev.any():
+        lo = int(prev[prev].index[-1])
+    nxt = breaks.iloc[b + 1 : hi + 1]
+    if nxt.any():
+        hi = int(nxt[nxt].index[0]) - 1
+    win = zframe.iloc[lo : hi + 1].reset_index(drop=True)
+
+    mean_col, std_col = backtest.find_spread_stat_columns(list(win.columns))
+    z = win["spread_zscore"].to_numpy(dtype=float)
+    std = win[std_col].to_numpy(dtype=float)
+    gap = seg.displacement / std
+    short_side = ex["direction"] == backtest.SHORT_TSM_LONG_QFF
+    ts = pd.to_datetime(win["timestamp"])
+
+    svg = T.trade_anatomy(
+        spread=[float(v) for v in win["spread"]],
+        mean=[float(v) for v in win[mean_col]],
+        std=[float(v) for v in std],
+        z_mid=[float(v) for v in z],
+        z_short=[float(v) for v in (z - gap)],
+        z_long=[float(v) for v in (z + gap)],
+        labels=[d.strftime("%m-%d %H:%M") for d in ts],
+        entry_z=float(pick.entry_z), exit_z=float(pick.exit_z),
+        direction=str(ex["direction"]),
+        events={
+            "entry_signal": a - lo, "entry_fill": int(ex["entry_idx"]) - lo,
+            "exit_signal": int(ex["exit_signal_idx"]) - lo, "exit_fill": b - lo,
+        },
+        aria=f"{spec.name} anatomy of one trade: spread with band, and the three z series",
+    )
+    side = "做空 spread" if short_side else "做多 spread"
+    enter_on = "z_short 上穿 +entry" if short_side else "z_long 下穿 −entry"
+    exit_on = "z_long 下穿 −exit" if short_side else "z_short 上穿 +exit"
+    legend = T.legend([
+        ("Spread / mid z", "var(--s1)"),
+        ("z_short 與 z_long（可成交側）", "var(--s3)"),
+        ("滾動均值與 entry 門檻", "var(--s2)"),
+    ])
+    return T.Fig(
+        fignum, "一筆交易的解剖",
+        f"實際成交的一筆 {side}（{ex['ret_bps']:+.1f} bps，貼近本組態的中位數）。"
+        "上：spread 與其滾動均值、entry 門檻帶。下：引擎真正據以判斷的三條 z。",
+        svg,
+        f"<b>spread 不是一條線，是三條。</b>引擎為每個方向各建一條「該筆委託真正要跨過的那一側」的 spread："
+        f"z_short 是賣出 {spec.equity_leg}、買進 {spec.futures_leg} 拿得到的價，z_long 是反向。"
+        f"兩者各距中價 displacement / spread_std，圖中的淺色帶就是這個間隔 —— 它會隨滾動標準差變寬變窄，"
+        f"所以是 z 的位移而非常數。<br>"
+        f"本例<b>進場條件是 {enter_on}</b>（不是 mid），"
+        f"<b>出場翻到另一側：{exit_on}</b>，因為平倉是反方向的委託。"
+        f"訊號與成交相隔一根 bar：訊號在收盤成立，成交在下一根允許交易的 bar 開盤，"
+        "兩次成交各收一次盤口價差成本。",
+        spec.spread.name,
+        legend=legend,
+    ).render()
+
+
 def build(spec: PairSpec) -> None:
     spread, seed = load_frames(spec)
     print(f"{spec.name}: {len(spread):,} spread rows, seed={'yes' if seed is not None else 'no'}")
@@ -285,6 +371,11 @@ def build(spec: PairSpec) -> None:
     notional = float(trades["actual_leg_notional_twd"].sum())
     pick_total = float(trades["total_fee_twd"].sum())
     pick_cross = float(trades["crossing_cost_twd"].sum())
+    # Gross notional against capital, measured rather than assumed. Both legs
+    # carry the same notional and point opposite ways, so gross is 2x one leg
+    # and net exposure is ~0. Whole-contract rounding is why the max exceeds 1.
+    gross_x = float(trades["actual_leg_notional_twd"].median() * 2 / CAPITAL)
+    gross_x_max = float(trades["actual_leg_notional_twd"].max() * 2 / CAPITAL)
     pick_total_bps = pick_total / notional * 10000.0
     pick_cross_bps = pick_cross / notional * 10000.0
 
@@ -292,8 +383,7 @@ def build(spec: PairSpec) -> None:
         T.doc_header(
             f"{spec.name} · 1-minute pair backtest",
             f"{spec.name} 配對策略回測報告",
-            f"{spec.legs}。以可成交價（executable-book）評分與計價。"
-            "所有結果以資本百分比或腿名目 bps 表示，與部位規模無關。",
+            f"{spec.legs}. 所有結果以資本百分比或腿名目 bps 表示，與部位規模無關。",
             [
                 ("期間", f"{s['start'][:10]} → {s['end'][:10]}"),
                 ("Sessions", f"{sessions}"),
@@ -305,32 +395,36 @@ def build(spec: PairSpec) -> None:
 
     body.append(
         '<div class="abstract"><h3>摘要</h3>'
+        f"<p>本策略在 {spec.legs_zh or spec.legs} 之間做配對均值回歸。兩腿以相同名目對沖，"
+        f"價差（spread）相對其滾動均值偏離達 entry_z 個標準差時進場，"
+        f"回歸至 exit_z 時平倉。訊號與成交都以<strong>可成交價</strong>評分 —— "
+        f"引擎為每個方向各建一條「該筆委託真正要跨過的那一側」的 spread，而非中價（見第 1 節）。</p>"
         f"<p>在 {sessions} 個 session、{days:.0f} 個日曆日的樣本上，經篩選後的建議組態為 "
         f"<code>window {pick.window:.0f} / entry_z {pick.entry_z:g} / exit_z {pick.exit_z:g}</code>，"
         f"取得 <strong>{len(trades)} 筆交易</strong>、總報酬 "
         f"<strong>{s['return_pct'] * 100:.2f}%</strong>（線性年化 "
         f"{s['return_pct'] * 365.0 / days * 100:.1f}%）、Sharpe "
         f"<strong>{stats['sharpe_ratio']:.2f}</strong>、"
-        f"最大回撤 {s['max_drawdown_pct'] * 100:.2f}%。</p>"
-        f"<p>成本結構是本配對的主要特徵：全部成本合計 "
+        f"最大回撤 {s['max_drawdown_pct'] * 100:.2f}%。"
+        f"全程 <strong>no leverage</strong> —— 兩腿名目合計等於資本（{gross_x:.2f}x），"
+        f"報酬來自部位本身而非融資放大。</p>"
+        f"<p>執行成本是本配對的主要特徵：全部成本合計 "
         f"<strong>{pick_total_bps:.1f} bps</strong>（腿名目，來回），"
-        f"其中過價成本 <strong>{pick_cross_bps:.1f} bps</strong> 佔 "
+        f"其中盤口價差成本 <strong>{pick_cross_bps:.1f} bps</strong> 佔 "
         f"<strong>{cross_share:.1f}%</strong>，遠高於佣金與交易稅之和。"
-        f"每筆交易每口的中位邊際為 <strong>{trades['ticks'].median():.2f} 個 tick</strong>"
-        f"（1 tick = {spec.tick_desc}），其中 "
-        f"{(trades['ticks'] < 1).mean() * 100:.0f}% 的交易落在一個 tick 以內。</p>"
-        f"<p>樣本規模是最大的保留：{len(trades)} 筆交易不足以區分技巧與運氣，"
-        f"且參數是在同一段資料上選出的，未經樣本外驗證。</p></div>"
+        f"每筆交易每口的中位邊際為 <strong>{trades['ticks'].median():.2f} 個 tick</strong>，"
+        f"即付完全部成本後仍高於微結構地板 {trades['ticks'].median():.1f} 倍（見第 3 節）。</p>"
+        f"<p class=\"ptr\">使用前的限制與保留見第 6 節。</p></div>"
     )
 
-    # Linear annualisation on calendar days. On a 2-month sample this is an
+    # Linear annualisation on calendar days. On a two-month sample this is an
     # extrapolation, not a forecast, so the card says so underneath rather than
     # letting the headline number stand unqualified.
     annualised = s["return_pct"] * 365.0 / days
     body.append(
         T.cards([
             ("年化報酬 Annualised", f"{annualised * 100:.1f}%",
-             f"總報酬 {s['return_pct'] * 100:.2f}% / {days:.0f} 日線性年化",
+             f"no leverage・總報酬 {s['return_pct'] * 100:.2f}%，{days:.0f} 日線性年化",
              "pos" if annualised > 0 else "neg"),
             ("Sharpe", f"{stats['sharpe_ratio']:.2f}",
              f"252 日年化，{stats['daily_return_count']} 個日報酬", ""),
@@ -339,7 +433,13 @@ def build(spec: PairSpec) -> None:
         ])
     )
 
-    body.append(T.section("1", "資料與建構"))
+    body.append(T.section("1", "策略機制"))
+    zframe_pick = slice_segment(
+        zscore_calc.calculate_zscore(spread, int(pick.window), seed_frame=seed), seg
+    ).reset_index(drop=True)
+    body.append(anatomy_figure(spec, zframe_pick, trades, pick, seg, 1))
+
+    body.append(T.section("2", "資料與建構"))
     body.append(
         "<p>Spread 定義為 <code>(fair − futures) / (fair + futures) × 200</code>，"
         "即以中價為基準的百分比尺度，因此一個 spread 單位約等於腿名目的 1%。"
@@ -365,13 +465,18 @@ def build(spec: PairSpec) -> None:
                 ["交易稅", f"{spec.tax_rate:.0e}", "期貨腿，單邊"],
                 ["契約乘數", f"{spec.multiplier:,.0f}", "股 / 口"],
                 ["1 tick", spec.tick_desc, "微結構門檻的基準"],
+                ["資本與槓桿",
+                 f"{CAPITAL:,.0f} TWD 資本，每腿目標 {LEG_NOTIONAL:,.0f} TWD",
+                 f"<b>no leverage</b>：兩腿名目合計 / 資本 = {gross_x:.2f}x"
+                 f"（最高 {gross_x_max:.2f}x，整數口數進位所致）。兩腿等名目反向，"
+                 "淨曝險約為零。期貨實際保證金遠低於名目，故此處以全額名目當資本是保守估計"],
             ],
             left_cols={0, 1, 2},
             number="Table 0", title="資料來源與成本假設",
         )
     )
 
-    body.append(T.section("2", "策略與執行成本模型"))
+    body.append(T.section("3", "執行成本模型"))
     body.append(
         f"<p>訊號不以中價評分。引擎為每個方向各建一條可成交 spread —— 做空用 "
         f"{spec.equity_leg} bid 配 {spec.futures_leg} ask，做多相反 —— 並以「該筆委託真正要跨過的那一側」"
@@ -379,8 +484,11 @@ def build(spec: PairSpec) -> None:
         "<p>位移同時做兩件事，這是同一個修正的兩半而非重複計算："
         "<strong>訊號面</strong>每根 bar 的門檻位移 <code>displacement / spread_std</code>，"
         "因為滾動標準差會變，所以這是 z 的位移而非常數；"
-        "<strong>成交面</strong>由於引擎仍以中價成交，同樣的位移每邊收取一次 "
-        "<code>crossing_cost_twd</code>，把中價成交價換算成可成交價。</p>"
+        "<strong>成交面</strong>由於引擎仍以中價成交，同樣的位移每邊收取一次"
+        "<strong>盤口價差成本</strong>（order-book gap，欄位 "
+        "<code>crossing_cost_twd</code>），把中價成交價換算成可成交價。"
+        "注意這裡的「價差」指的是委託簿上買賣報價之間的間隔，"
+        "與本報告用來做均值回歸的 spread 是兩回事。</p>"
     )
 
     # A tick is the unit the whole microstructure screen is denominated in, so
@@ -400,7 +508,7 @@ def build(spec: PairSpec) -> None:
         f"<strong>一筆交易若每口賺不到一個 tick，那個獲利就無法與買賣價差跳動區分</strong> —— "
         f"衡量到的只是成交價印在買價還是賣價上的隨機性，不是 edge。"
         f"這就是第 4 節的篩選把門檻設在「中位邊際 ≥ 2 ticks」的原因。</p>"
-        f"<p>要注意本報告的 tick 數是<strong>付完過價成本之後</strong>的餘額，"
+        f"<p>要注意本報告的 tick 數是<strong>付完盤口價差成本之後</strong>的餘額，"
         f"因為位移機制已經在成本裡收過一次來回的盤口費用。三個單位對照如下：</p>"
     )
     gross_bps = float(trades["gross_pnl_twd"].sum() / notional * 10000.0)
@@ -410,7 +518,7 @@ def build(spec: PairSpec) -> None:
             [
                 ["毛利（來回）", f"{gross_bps:.1f}", f"{gross_bps / tick_bps:.2f}", "未扣成本"],
                 ["全部成本（來回）", f"−{pick_total_bps:.1f}", f"−{pick_total_bps / tick_bps:.2f}",
-                 f"其中過價 {pick_cross_bps:.1f} bps"],
+                 f"其中盤口價差 {pick_cross_bps:.1f} bps"],
                 ["淨額（中位那筆）", f"{med_tick * tick_bps:.1f}", f"{med_tick:.2f}",
                  "即報告各處引用的中位邊際"],
                 ["一個 tick", f"{tick_bps:.1f}", "1.00", "微結構地板"],
@@ -422,8 +530,8 @@ def build(spec: PairSpec) -> None:
         )
     )
 
-    body.append(T.section("3", "結果"))
-    fignum = 1
+    body.append(T.section("4", "結果"))
+    fignum = 2
     body.append(
         T.Fig(
             fignum, "權益曲線與回撤",
@@ -432,14 +540,14 @@ def build(spec: PairSpec) -> None:
             T.equity_drawdown(labels, eq,
                               aria=f"{spec.name} cumulative return and drawdown by session day"),
             "每個 session day 取最後一根 bar 的權益。未平倉部位以中價計價，"
-            "因此出場側的過價成本要到實際成交才反映在曲線上。",
+            "因此出場側的盤口價差成本要到實際成交才反映在曲線上。",
             spec.spread.name,
         ).render()
     )
     fignum += 1
 
     cost_names = [
-        "過價成本 Crossing",
+        "盤口價差 Order-book gap",
         f"{spec.futures_leg} 手續費",
         f"{spec.equity_leg} 手續費",
         "交易稅 Tax",
@@ -467,7 +575,7 @@ def build(spec: PairSpec) -> None:
                            aria=f"{spec.name} cost as a share of gross profit",
                            unit="% of gross"),
 f"每次來回的成本幾乎與組態無關（本樣本 <b>{pick_total_bps:.1f} bps</b> of 腿名目，"
-            f"其中過價 <b>{pick_cross_bps:.1f} bps</b> 佔 "
+            f"其中盤口價差 <b>{pick_cross_bps:.1f} bps</b> 佔 "
             f"<b>{pick_cross / pick_total * 100:.1f}%</b>），可以直接對帳："
             f"位移每邊收一次，來回即 200 × {seg.displacement:.4f} = "
             f"<b>{200 * seg.displacement:.1f} bps</b>，與量測到的盤口寬度一致。"
@@ -479,7 +587,7 @@ f"每次來回的成本幾乎與組態無關（本樣本 <b>{pick_total_bps:.1f}
     )
     fignum += 1
 
-    body.append(T.section("4", "參數穩健性"))
+    body.append(T.section("5", "參數穩健性"))
     body.append(
         f"<p>網格為 window × entry_z × exit_z = {len(WINDOWS)}×{len(ENTRIES)}×{len(EXITS)}，"
         f"扣除 <code>exit_z &lt; −entry_z</code> 的退化組合後共 {len(g)} 格，"
@@ -519,7 +627,7 @@ f"每次來回的成本幾乎與組態無關（本樣本 <b>{pick_total_bps:.1f}
         "<p>四道門檻：交易筆數 ≥ 15（低於此統計無意義）、每口中位邊際 ≥ 2 個 tick、"
         "落在一個 tick 以內的交易 ≤ 15%、鄰域 Sharpe ≥ 全網格中位數（排除孤立尖峰）。"
         "位移已經把量測到的盤口成本收掉了，所以 tick 檢定在這裡是<strong>剩餘餘裕</strong>的檢查："
-        "付完過價成本之後還剩多少緩衝，可以容忍盤口模型偏樂觀。</p>"
+        "付完盤口價差成本之後還剩多少緩衝，可以容忍盤口模型偏樂觀。</p>"
     )
     srows = []
     for r in (surv if len(surv) else g).nlargest(8, "sharpe").itertuples():
@@ -606,7 +714,7 @@ f"每次來回的成本幾乎與組態無關（本樣本 <b>{pick_total_bps:.1f}
             )
         )
 
-    body.append(T.section("5", "風險與保留"))
+    body.append(T.section("6", "限制與保留"))
     weekend = sum(
         any(d.weekday() == 5 for d in pd.date_range(a.normalize(), b.normalize(), freq="D"))
         for a, b in zip(trades["entry_time"], trades["exit_time"])
@@ -626,7 +734,7 @@ f"每次來回的成本幾乎與組態無關（本樣本 <b>{pick_total_bps:.1f}
             "尚不足以觀察到不收斂的情況。</p>"
         )
     body.append(
-        '<div class="callout"><h3>使用前必讀</h3>'
+        '<div class="callout"><h3>這份結果不能證明什麼</h3>'
         + extreme_win
         + f"<p><strong>樣本規模。</strong>{len(trades)} 筆交易、{sessions} 個 session。"
         f"勝率 {win_rate * 100:.0f}% 與獲利因子在這個樣本數下"
@@ -638,7 +746,7 @@ f"每次來回的成本幾乎與組態無關（本樣本 <b>{pick_total_bps:.1f}
         f"最長持有 {trades['hours'].max():.0f} 小時。回測只在 session 內對部位計價，"
         "閉市期間的不利波動與保證金壓力不在模型內。</p>"
         f"<p><strong>盤口模型。</strong>位移 {seg.displacement:.4f} 由有限的報價樣本量測而得。"
-        f"若實際盤口更寬，過價成本會等比例上升 —— 而它已是 {pick_cross_bps:.1f} bps、"
+        f"若實際盤口更寬，盤口價差成本會等比例上升 —— 而它已是 {pick_cross_bps:.1f} bps、"
         f"佔本組態全部成本的 {pick_cross / pick_total * 100:.0f}%。</p></div>"
     )
 

@@ -142,7 +142,7 @@ def main(argv: list[str]) -> int:
     body.append(
         f"<p>兩邊都在 {COMMON_START} 之後評分。這個起點不是任意的："
         "QFF 的最小跳動單位在 2026-07-05 由 5 TWD 降為 1 TWD，"
-        "過價成本一次降掉八成，單一位移參數跨不過那個斷點。"
+        "盤口價差成本一次降掉八成，單一位移參數跨不過那個斷點。"
         "每個配對各自跑完整網格、套用同一組篩選門檻，再取各自的最佳組態比較。</p>"
     )
 
@@ -169,7 +169,7 @@ def main(argv: list[str]) -> int:
             f"{b['trades'].net_pnl_twd.median():,.0f}", "TWD，兩者接近"),
         row("成本 / 毛利", f"{a['fee_gross'] * 100:.1f}%", f"{b['fee_gross'] * 100:.1f}%",
             "接近相同，所以差距來自 edge 而非成本"),
-        row("過價 / 總成本", f"{a['cross_share'] * 100:.1f}%", f"{b['cross_share'] * 100:.1f}%",
+        row("盤口價差 / 總成本", f"{a['cross_share'] * 100:.1f}%", f"{b['cross_share'] * 100:.1f}%",
             "CCF 的盤口主導其成本"),
         row("每口中位邊際", f"{a['trades'].ticks.median():.2f} ticks",
             f"{b['trades'].ticks.median():.2f} ticks", "QFF 遠離微結構雜訊"),
