@@ -1,181 +1,191 @@
-# QFF-TSM Spread Backtest
+# TAIFEX / US Pairs Trading Research
 
-這個專案下載並整理 TAIFEX QFF、Binance TSMUSDT.P、BitoPro USDT/TWD 的 1m 資料，計算 TradingView Pine 公式對應的 spread 與 rolling z-score，並用簡單事件式回測框架測試 QFF/TSM 配對交易策略。
+Statistical arbitrage between TAIFEX single-stock futures and their US-listed
+counterparts. The same company is priced in two markets; the gap between those
+prices oscillates around a mean, and the strategy takes an offsetting position
+in both legs when the gap widens, then waits for it to close.
 
-## 資料來源
+Two active pairs:
 
-所有時間戳都轉成 Taipei time (`+08:00`)。
+| Pair | Taiwan leg | US leg | FX |
+|---|---|---|---|
+| **CCF / UMC** | TAIFEX CCF (UMC stock futures, 2,000 shares/contract) | NYSE:UMC ADR (1 ADR = 5 shares) | FX_IDC USDTWD |
+| **QFF / TSM** | TAIFEX QFF (TSMC stock futures, 100 shares/contract) | Binance TSMUSDT perpetual | BitoPro USDT/TWD |
 
-- **QFF**
-  - 來源：TAIFEX tick 歷史資料。
-  - 腳本：`scripts/build_qff1_1m.py`
-  - 輸出：`data/processed/qff1_1m.csv`
-  - 處理：將 tick 聚合成 1m OHLCV，作為 QFF1 front-month 連續資料。
+All timestamps are Taipei time (`+08:00`).
 
-- **TSMUSDT.P**
-  - 來源：Binance USD-M futures，透過 `ccxt` 下載。
-  - symbol：`TSM/USDT:USDT`
-  - 腳本：`scripts/download_binance_tsmusdtp_1m.py`
-  - 輸出：`data/processed/binance_tsmusdtp_1m_taipei.csv`
+## The strategy in brief
 
-- **USDT/TWD**
-  - 來源：BitoPro，透過 `ccxt` 下載。
-  - symbol：`USDT/TWD`
-  - 腳本：`scripts/download_bitopro_usdttwd_1m.py`
-  - 輸出：`data/processed/bitopro_usdttwd_1m_taipei.csv`
+The spread is defined on a mid-price percentage scale, so one spread unit is
+roughly 1% of leg notional:
 
-目前 QFF session 回測資料範圍為 `2026-05-08 17:25:00+08:00` 到 `2026-06-22 13:44:00+08:00`，共約 `29,909` 根 1m bars。
+```text
+fair   = us_leg_close × fx / 5
+spread = (fair − tw_leg_close) / (fair + tw_leg_close) × 200
+```
 
-## 指標計算
+A rolling z-score measures how far the spread has been pulled: at `z > entry_z`
+short the US leg and long the Taiwan leg, close when `z` comes back inside
+`exit_z`, and the mirror image for the other direction. Fills happen at the next
+bar's open.
 
-Spread 計算腳本：
+The design decision that matters most is that **signals are not scored at mid**.
+The engine builds one executable spread per direction — short uses the US bid
+against the Taiwan ask, long the reverse — and tests both entry and exit against
+the side the order would actually have to cross, charging the same displacement
+as a crossing cost. Without that correction the optimiser walks straight to the
+high-frequency corner of the grid, where the apparent profit is bid-ask bounce
+rather than edge.
+
+The hard floor for telling real edge from noise is the **tick**. A bid-ask
+spread can never be narrower than one tick, so a trade earning less than one
+tick per contract cannot be distinguished from the randomness of whether a fill
+printed on the bid or the ask. The reports screen at a median edge of ≥ 2 ticks.
+
+## Backtest results
+
+Best configuration for each pair, on 2M TWD capital with 1M notional per leg.
+**These figures are recomputed by `make_reports.py` on every run; below is the
+result on data through 2026-08-15.**
+
+| | CCF / UMC | QFF / TSM |
+|---|---|---|
+| Period | 2026-06-09 → 08-15 (46 sessions) | 2026-07-06 → 08-15 (29 sessions) |
+| Configuration | w2500 / entry 1.0 / exit 0.25 | w1560 / entry 2.0 / exit 0 |
+| Trades | 32 | 21 |
+| Total return | **+88.0%** annual | **27.2%** annual |
+| Sharpe | 8.75 | 3.63 |
+| Max drawdown | −1.97% | −1.59% |
+| Return / drawdown | 8.1x | 1.9x |
+| Median edge per contract | 2.21 ticks (6% inside one tick) | 8.08 ticks (14% inside one tick) |
+| Round-trip cost | 54.9 bps (78.9% crossing) | 32.8 bps (46.0% crossing) |
+
+QFF/TSM covers a shorter period because **QFF's tick size dropped from 5 TWD to
+1 TWD on 2026-07-05**, cutting its crossing cost by four fifths. A single
+displacement parameter cannot span that break, so only the post-change segment
+is scored.
+
+
+
+## Usage
+
+### Environment
+
+Python 3.10+ (developed on 3.12.13). Everything runs in the `Quant` conda
+environment:
+
+```bash
+conda create -n Quant python=3.12
+conda run -n Quant pip install -r requirements.txt
+```
+
+`pandas` and `numpy` are pinned exactly, because spread and z-score outputs are
+verified byte-identical against a stored SHA256 baseline and a minor release of
+either is enough to move them. Bump them deliberately and re-run the baseline.
+`requirements-archive.txt` adds `xgboost` and `ib_async` for the closed studies
+in `scripts/archive/`; nothing reachable from `make_reports.py` needs them.
+
+### Refresh the data
+
+Every step append-merges, so re-running is safe:
+
+```bash
+python scripts/ingest/taifex_1m.py --product CCF
+python scripts/ingest/taifex_1m.py --product QFF
+python scripts/ingest/tv_umc.py
+python scripts/ingest/tv_ccf_umc.py
+python scripts/ingest/ccxt_ohlcv.py --feed binance_tsmusdtp
+python scripts/ingest/ccxt_ohlcv.py --feed bitopro_usdttwd
+```
+
+### Build the spreads
+
+```bash
+python scripts/features/spread.py --pair ccf_umc --interval 1m --weekend-policy none
+python scripts/features/spread.py --pair qff_tsm --interval 1m
+```
+
+### Rebuild every report
+
+```bash
+python scripts/make_reports.py
+```
+
+Takes about 30 minutes — QFF/TSM alone runs a full grid over two tick regimes ×
+five windows. Use `--only ccf_umc` for a single report. Output lands in
+`reports/`.
+
+On Windows PowerShell:
 
 ```powershell
-& 'D:\Users\miniconda3\condabin\conda.bat' run -n Quant python scripts/calculate_qff_tsm_spread_1m.py
+& 'D:\Users\miniconda3\condabin\conda.bat' run -n Quant python scripts/make_reports.py
 ```
 
-計算方式：
+### Run a single backtest
 
-```text
-qff_close_filled = QFF close, forward-filled only inside QFF trading sessions
-tsm_twd_fair = tsm_close * usdttwd_close / 5
-spread = (tsm_twd_fair - qff_close_filled) / (tsm_twd_fair + qff_close_filled) * 200
+Compute the z-score, then run the engine:
+
+```bash
+python scripts/features/zscore.py --spread-path data/features/qff_tsm/spread_1m.csv --out data/features/qff_tsm/zscore_1m.csv --window 1560
 ```
 
-資料以 QFF trading session 為主，非 trading session 全部裁掉。Session 內若 QFF 沒有該分鐘 bar，才用上一根 QFF close 補齊並標記 `qff_was_filled=True`；TSM 與 USDT/TWD 若缺分鐘則視為資料異常，不自動補值。
-
-Z-score 計算腳本：
-
-```powershell
-& 'D:\Users\miniconda3\condabin\conda.bat' run -n Quant python scripts/calculate_spread_zscore_1m.py
+```bash
+python scripts/backtest/engine.py --input data/features/qff_tsm/zscore_1m.csv --entry-z 2.0 --exit-z 0.0 --executable-displacement 0.0755
 ```
 
-計算方式：
+Output lands in `data/runs/scratch/`. Point `--equity-out` / `--trades-out` /
+`--summary-out` at `data/runs/<tag>/` for anything worth keeping.
 
-```text
-spread_mean_997 = rolling_mean(spread, window=997, min_periods=997)
-spread_std_997  = rolling_std(spread, window=997, min_periods=997, ddof=0)
-spread_zscore   = (spread - spread_mean_997) / spread_std_997
+Three things the CLI does not do for you, all of which the reports handle:
+
+- **The engine's defaults are QFF/TSM-shaped** — contract multiplier 100, US leg
+  5 bps, and the QFF/TSM bar files for fill prices. Running CCF/UMC through it
+  needs `--qff-contract-multiplier 2000 --tsm-fee-bps 2.5` plus `--qff-ohlcv` /
+  `--tsm-ohlcv` / `--usdttwd-ohlcv` pointing at that pair's legs. Getting this
+  wrong produces a quietly wrong answer rather than an error. The per-pair
+  values live in the `PAIRS` table in `report/pair.py`.
+- `--executable-displacement` is each pair's measured book displacement.
+  **Omitting it prices at mid and overstates performance.**
+- The reports seed the rolling window (`--seed-spread-path`) so a long window
+  does not burn the sample on warmup. `report/pair.py` trims the seed to before
+  the sample start; the CLI does not, and rejects an overlapping seed.
+
+## Repository layout
+
+```
+scripts/
+  lib/        shared library: time, bar I/O, FX, sessions, pair config, paths
+  ingest/     downloads → data/bars/
+  features/   spread / z-score / entry gates → data/features/
+  backtest/   engine, grid search, OU thresholds
+  report/     HTML report generators
+  archive/    closed studies (see scripts/archive/README.md)
+  make_reports.py
+
+data/
+  raw/        exchange downloads, as received
+  bars/       canonical bar series, one file per symbol+interval
+  features/   spread / z-score (rebuildable, gitignored)
+  runs/       one directory per backtest: summary.json + trades.csv
+reports/      generated HTML
 ```
 
-前 `996` 筆 QFF session 觀測為 warmup，`zscore_valid = False`。
+Three rules keep this from decaying again:
 
-## 交易策略
+1. **Bar filenames carry no date or vintage suffix.** Suffixes like `_0812`,
+   `_cumulative` and `_latest` caused a real incident: the download step wrote
+   the undated default while the spread step read the dated file, so running the
+   documented refresh updated a file nothing else read — and 10,080 minutes of
+   early history were permanently lost in the process. Use `--start` / `--end`
+   for a historical slice.
+2. **One directory per run, parameters travelling with results.** A filename
+   cannot encode twenty-odd parameters; `summary.json`'s `parameters` block can.
+3. **Paths are defined once**, in `lib/paths.py`.
 
-回測腳本：
+## Further reading
 
-```powershell
-& 'D:\Users\miniconda3\condabin\conda.bat' run -n Quant python scripts/backtest_pair_strategy_1m.py
-```
-
-預設參數：
-
-```text
-entry_z = 2.0
-exit_z = 0.0
-leg_notional_twd = 1,000,000
-initial_capital_twd = 2,000,000
-max_entry_delay_minutes = 15
-```
-
-Entry:
-
-- 只在 `entry_allowed=True` 且 `zscore_valid=True` 的分鐘評估。
-- 若目前空手且 `z > entry_z`，建立 `short TSM / long QFF` 訊號。
-- 若目前空手且 `z < -entry_z`，建立 `long TSM / short QFF` 訊號。
-- 訊號成立後，在下一個 `entry_allowed=True` 分鐘用 open 成交。
-- 若成交時間與訊號時間差超過 `max_entry_delay_minutes`，取消該訊號。
-- 成交分鐘不重新驗證 z-score。
-
-Exit:
-
-- `short TSM / long QFF`：若 `z < -exit_z`，建立平倉訊號。
-- `long TSM / short QFF`：若 `z > exit_z`，建立平倉訊號。
-- z-score 與 time-stop 平倉訊號成立後，在下一個 `close_allowed=True` 分鐘用 open 成交。
-- 若持倉進入每週最後一段可交易 session 且沒有觸發 z-score exit，會在該 session 最後一個 `close_allowed=True` 分鐘用 close 強制平倉，`exit_reason = friday_session_end`。
-- 若資料結束仍有持倉，最後一根強制平倉。
-
-QFF 交易時段：
-
-- 日盤：`08:45` 到 `13:45`
-- 夜盤：`17:25` 到次日 `05:00`
-- 週五夜盤與每週最後一段可交易 session 只允許平倉，不允許開倉。
-- 每週最後 session 由資料中的下一個 `close_allowed=True` 分鐘是否跨 ISO week 判斷，因此週五假日或沒有週五夜盤時，會改由週末前最後一段實際可交易 session 生效。
-
-## 部位與成本
-
-QFF 先用 entry fill bar 的 open 轉成實際可交易整數口數，再用 QFF 實際名目金額對齊 TSM 腿：
-
-```text
-raw_qff_contracts = leg_notional_twd / (entry_qff_open_filled * qff_contract_multiplier)
-qff_contracts = floor(raw_qff_contracts + 0.5)
-actual_leg_notional_twd = abs(qff_contracts) * qff_contract_multiplier * entry_qff_open_filled
-tsm_units = actual_leg_notional_twd / entry_tsm_twd_fair_open
-```
-
-若 `qff_contracts == 0`，該次 entry 取消。
-
-`--qff-lots N`（N > 0）改成固定口數：`qff_contracts = N`，`leg_notional_twd` 不再參與 sizing，
-其餘三行不變（名目仍由實際口數反推，TSM 腿照樣對齊）。`raw_qff_contracts` 在兩種模式下都維持
-上式的名目分數，這樣「四捨五入偏移」這欄在固定口數模式下才不會變成恆等於口數。summary 的
-`parameters.sizing_mode` 會記錄實際生效的是 `notional` 還是 `fixed_lots`。
-
-實盤送的是固定口數，因此兩種模式的成本結構不同：**按口計價的費用**會線性放大、在比較中互相抵消，
-**每筆最低手續費**不會 —— 它是固定成本攤在較小的部位上。要掃參數就用實際會下的口數掃，
-grid search 也支援 `--qff-lots`。
-
-預設成本：
-
-```text
-tsm_fee_bps = 5.0
-qff_fee_per_contract_twd = 88.0
-qff_tax_rate = 0.00002
-qff_contract_multiplier = 100
-```
-
-QFF 單邊手續費 88 TWD/口，來回 88×2 = 176；加上來回交易稅（每邊約 5，合計約 10），單口來回總交易成本約 88×2 + 10 = 186 TWD。
-
-`--qff-fee-bps B`（B > 0）改成按契約名目計價，**取代**上面的固定金額。兩者不能直接換算：
-bps 是「價格 × 乘數」的比例，所以固定 88 TWD 在 10,000 TWD 的契約上等於 88 bps，
-在 100,000 TWD 的契約上只有 8.8 bps。換算時務必以實際交易的契約名目為準。
-`parameters.qff_fee_mode` 會記錄實際生效的是 `flat` 還是 `bps`。
-
-`--executable-displacement D`（D > 0）改用可成交價評分：每根 bar 的門檻位移 `D / spread_std`，
-同時每邊收取 `D/100 × 腿名目` 的過價成本（`crossing_cost_twd`）。這兩件事是同一個修正的兩半
-（位移決定何時進場，收費把 mid 成交價換算成可成交價），不是重複計算。此模式需要輸入檔具備
-`spread_std*` 欄位；另外 `--frozen-mean-exit` 與 `--drift-bail-c` 直接比較 spread 絕對水準、
-沒有對應的位移基準，會被明確拒絕而不是混用兩套定價。
-
-手續費與交易稅都是單邊成本，entry 與 exit 各扣一次：
-
-```text
-tsm_fee_twd = abs(tsm_units) * fill_tsm_twd_fair * tsm_fee_bps / 10000
-qff_fee_twd = abs(qff_contracts) * qff_fee_per_contract_twd
-qff_tax_twd = abs(qff_contracts) * round(qff_price * qff_contract_multiplier * qff_tax_rate)
-net_pnl_twd = gross_pnl_twd - total_fee_twd
-```
-
-目前不計入 FX 換匯成本、TSM funding、滑價、保證金利息或券商額外手續費。
-
-## 輸出
-
-回測輸出：
-
-- `data/processed/qff_tsm_pair_backtest_equity_1m_qff_session.csv`
-- `data/processed/qff_tsm_pair_backtest_trades_qff_session.csv`
-- `data/processed/qff_tsm_pair_backtest_summary_qff_session.json`
-
-目前 QFF session 預設輸出的最新結果（QFF 手續費 88/口，fee as-of 2026-06-30）：
-
-```text
-trades = 90
-net_pnl_twd = 172,453.68
-return_pct = 8.6227%
-max_drawdown_twd = -38,486.57
-qff_forward_filled_session_minutes = 6,328
-zscore_valid_rows = 29,412
-```
-
-主力回測已改用 15m 資料（見 `qff_tsm_parameter_grid_report_15m.html`）；15m grid 最佳組態 w33 / entry 2.0 / exit 0.5 在新手續費下為 net 273,923、return 13.70%、Sharpe 6.10。
-
-大型 raw/processed CSV 資料預設不進 Git；需要重建時依序重跑下載、spread、z-score、backtest 腳本。舊的連續 1m 檔案保留，新 QFF session 補值版輸出使用 `_qff_session` 後綴。
+- [docs/methodology.md](docs/methodology.md) — session alignment, FX splicing,
+  cost model, position sizing, known differences between the two code paths
+- [docs/ccf_umc_weekend_policy.md](docs/ccf_umc_weekend_policy.md) — weekend
+  rules and the Monday unhedged window
+- [docs/margin_management_analysis.md](docs/margin_management_analysis.md) —studies and what they concluded

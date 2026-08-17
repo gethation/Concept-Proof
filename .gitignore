@@ -1,5 +1,35 @@
+# Version control follows lifetime, not file type.
+#
+# Tracked: anything that is a *conclusion* -- run summaries, trade-level detail,
+# parameter grids, generated reports. Small, and the thing you would actually
+# want to look back at.
+#
+# Ignored: anything reproducible from the tracked inputs plus a command, and
+# anything large enough that committing each new vintage would bloat history.
+
+# Exchange downloads, kept byte-for-byte as received. Large, and re-fetchable
+# from the source archives.
 data/raw/
-data/processed/*.csv
+
+# Canonical bar series. NOT in git: ~85 MB of CSV that grows by append, so every
+# refresh would commit a whole new copy of each file.
+#
+# These are the one thing here that cannot be regenerated from anything else in
+# the repo -- tvdatafeed's anonymous endpoint only serves a rolling ~6 weeks, so
+# an aged-out day is gone for good. Back this directory up somewhere outside the
+# repo, or move it to git-lfs / DVC if it should be versioned.
+data/bars/
+
+# Spread and z-score series: a pure function of data/bars plus parameters.
+# Rebuild with scripts/features/spread.py and scripts/features/zscore.py.
+data/features/
+
+# Equity curves are a cumulative function of the run's own trades.csv, and are
+# by far the biggest thing a backtest writes. summary.json and trades.csv from
+# the same run ARE tracked.
+data/runs/**/equity.csv
+data/runs/scratch/
+
 tmp/
 
 __pycache__/
@@ -7,4 +37,3 @@ __pycache__/
 *.pyc
 
 node_modules/
-tmp_*.html

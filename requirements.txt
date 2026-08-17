@@ -1,0 +1,42 @@
+# Dependencies for the documented pipeline: ingest -> features -> backtest -> report.
+#
+#     conda create -n Quant python=3.12
+#     conda run -n Quant pip install -r requirements.txt
+#
+# Python 3.10 or newer (PEP 604 `X | Y` annotations are used unguarded in a few
+# modules). Developed and tested on 3.12.13.
+#
+# Extras for the closed studies in scripts/archive/ live in
+# requirements-archive.txt.
+
+# --- numerical core -------------------------------------------------------
+#
+# Pinned exactly, not floated. Spread and z-score outputs are verified
+# byte-identical against a stored SHA256 baseline (see docs/methodology.md and
+# scripts/features/spread.py), and a minor pandas or numpy release is enough to
+# move that: rolling-window edge handling, default dtypes, groupby ordering and
+# float formatting on write have all changed across releases. Bump these
+# deliberately, re-run the baseline, and record the diff.
+pandas==3.0.3
+numpy==2.4.6
+
+# --- analysis -------------------------------------------------------------
+# scipy: OU analytic optimal thresholds (Bertram 2010) in scripts/backtest/ou.py.
+scipy>=1.15,<2
+
+# --- data ingest ----------------------------------------------------------
+# ccxt: Binance USD-M and BitoPro OHLCV (scripts/ingest/ccxt_ohlcv.py).
+ccxt>=4.5,<5
+
+# requests: TAIFEX time-and-sales archive downloads
+# (scripts/ingest/taifex_ticks.py).
+requests>=2.32,<3
+
+# tvdatafeed: TradingView bars for the NYSE, TAIFEX and FX_IDC legs
+# (scripts/ingest/tv_umc.py, tv_ccf_umc.py).
+#
+# NOT the PyPI package of the same name -- this is the maintained rongardF fork,
+# installed straight from git and pinned to a commit. The anonymous endpoint it
+# uses serves only a rolling ~6 weeks of intraday history, which is why every
+# downloader append-merges instead of overwriting.
+tvdatafeed @ git+https://github.com/rongardF/tvdatafeed.git@e6f6aaa7de439ac6e454d9b26d2760ded8dc4923

@@ -1,0 +1,15 @@
+# Extras for the closed studies in scripts/archive/. Not needed to run anything
+# reachable from make_reports.py.
+#
+#     conda run -n Quant pip install -r requirements-archive.txt
+
+-r requirements.txt
+
+# xgboost: 15m spread-change model, scripts/archive/ml/.
+xgboost>=3.0,<4
+
+# ib_async: Interactive Brokers history for the TAIFEX/US index-futures study,
+# scripts/archive/us_index/download_legs.py. Needs a running TWS or IB Gateway
+# with the API enabled; the import is guarded, so the rest of archive/ works
+# without it.
+ib_async>=2.0,<3

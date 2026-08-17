@@ -1,0 +1,161 @@
+<title>配對策略對照報告</title>
+<style>
+/* Latin letters and digits set in Times New Roman, CJK left on the sans face.
+   The unicode-range confines the local() serif to Latin, digits, punctuation
+   and the arrows/maths this report uses, so every CJK codepoint falls through
+   to the next family in the stack rather than being rendered by whatever CJK
+   glyphs the serif happens to carry. */
+@font-face{font-family:"ReportSerif";
+ src:local("Times New Roman"),local("Times"),local("Liberation Serif"),local("Tinos");
+ unicode-range:U+0020-007E,U+00A0-00FF,U+2010-2027,U+2030-205E,U+2070-209F,
+ U+20A0-20BF,U+2190-21FF,U+2200-22FF,U+2264-2265;}
+:root{color-scheme:light;
+ --page:#eef1f4;--surface:#ffffff;--ink:#16202e;--ink2:#4c5a6b;--muted:#8b97a5;
+ --grid:#e4e8ec;--rule:#ccd4dc;--accent:#1f4e79;--accent-soft:#e9eff5;
+ --s1:#1f4e79;--s2:#6b7c8f;--s3:#97a4b2;--s4:#c2cbd4;
+ --good:#1f6f4a;--warn:#a8720f;--crit:#9e3232;
+ --h0:#eaf0f5;--h1:#d2e0ea;--h2:#b1c8dc;--h3:#8aabc9;--h4:#5f8bb2;--h5:#3a6c98;--h6:#1f4e79;
+ --hi0:#16202e;--hi1:#16202e;--hi2:#16202e;--hi3:#16202e;--hi4:#ffffff;--hi5:#ffffff;--hi6:#ffffff;}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){color-scheme:dark;
+ --page:#0b1016;--surface:#141c25;--ink:#e9eef3;--ink2:#a9b6c3;--muted:#78848f;
+ --grid:#222c37;--rule:#2f3a46;--accent:#6ea8d8;--accent-soft:#18242f;
+ --s1:#6ea8d8;--s2:#7e8d9c;--s3:#5c6a78;--s4:#3f4a56;
+ --good:#4fa87a;--warn:#d3a03c;--crit:#d06767;
+ --h0:#18242f;--h1:#1f3345;--h2:#2a475f;--h3:#3a6188;--h4:#4d7fac;--h5:#6ea8d8;--h6:#9cc7e8;
+ --hi0:#e9eef3;--hi1:#e9eef3;--hi2:#e9eef3;--hi3:#ffffff;--hi4:#0b1016;--hi5:#0b1016;--hi6:#0b1016;}}
+:root[data-theme="dark"]{color-scheme:dark;
+ --page:#0b1016;--surface:#141c25;--ink:#e9eef3;--ink2:#a9b6c3;--muted:#78848f;
+ --grid:#222c37;--rule:#2f3a46;--accent:#6ea8d8;--accent-soft:#18242f;
+ --s1:#6ea8d8;--s2:#7e8d9c;--s3:#5c6a78;--s4:#3f4a56;
+ --good:#4fa87a;--warn:#d3a03c;--crit:#d06767;
+ --h0:#18242f;--h1:#1f3345;--h2:#2a475f;--h3:#3a6188;--h4:#4d7fac;--h5:#6ea8d8;--h6:#9cc7e8;
+ --hi0:#e9eef3;--hi1:#e9eef3;--hi2:#e9eef3;--hi3:#ffffff;--hi4:#0b1016;--hi5:#0b1016;--hi6:#0b1016;}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--ink);
+ font:16px/1.75 "ReportSerif",system-ui,-apple-system,"Segoe UI","Noto Sans TC",
+ "Microsoft JhengHei",sans-serif;
+ -webkit-font-smoothing:antialiased}
+/* The tracked uppercase micro-labels stay on the sans: letterspaced serif caps
+   read as decoration, and the contrast against the serif body is what makes
+   the section furniture legible as furniture. */
+.kicker,.fignum,.tnum,thead th,.abstract h3,.callout h3,.card .k{
+ font-family:system-ui,-apple-system,"Segoe UI","Noto Sans TC","Microsoft JhengHei",sans-serif}
+main{max-width:1000px;margin:0 auto;padding:0 24px 96px}
+header.doc{padding:56px 0 26px;border-bottom:2px solid var(--ink);margin-bottom:8px}
+.kicker{font-size:11.5px;letter-spacing:.13em;text-transform:uppercase;
+ color:var(--accent);font-weight:650;margin-bottom:12px}
+h1{font-size:33px;line-height:1.2;margin:0 0 12px;letter-spacing:-.022em;font-weight:660}
+.standfirst{font-size:17px;color:var(--ink2);margin:0 0 18px;max-width:64ch;line-height:1.6}
+.meta{display:flex;flex-wrap:wrap;gap:8px 26px;font-size:12.5px;color:var(--muted);
+ font-variant-numeric:tabular-nums}
+.meta b{color:var(--ink2);font-weight:600}
+h2{font-size:20px;margin:52px 0 6px;letter-spacing:-.015em;font-weight:640;
+ padding-bottom:8px;border-bottom:1px solid var(--rule)}
+h2 .num{color:var(--accent);font-variant-numeric:tabular-nums;margin-right:12px}
+h3{font-size:15.5px;margin:30px 0 6px;color:var(--ink);font-weight:640}
+p{margin:0 0 15px;color:var(--ink2);max-width:74ch}
+p.lead{color:var(--ink);font-size:16.5px}
+strong{color:var(--ink);font-weight:640}
+code{background:var(--accent-soft);color:var(--accent);padding:1.5px 6px;
+ border-radius:4px;font-size:12.5px;font-family:ui-monospace,"SF Mono",Menlo,monospace}
+a{color:var(--accent)}
+.abstract{background:var(--surface);border:1px solid var(--rule);border-left:3px solid var(--accent);
+ border-radius:3px;padding:22px 26px;margin:26px 0 8px}
+.abstract h3{margin:0 0 8px;font-size:11.5px;letter-spacing:.13em;text-transform:uppercase;
+ color:var(--accent)}
+.abstract p{margin:0 0 11px}.abstract p:last-child{margin:0}
+.callout{background:var(--surface);border:1px solid var(--rule);border-left:3px solid var(--warn);
+ border-radius:3px;padding:18px 24px;margin:22px 0}
+.callout h3{margin:0 0 8px;font-size:11.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--warn)}
+.callout p:last-child{margin:0}
+/* Three headline figures, so three columns -- a fixed count rather than
+   auto-fit, which leaves an orphan cell whose background reads as a broken
+   tile when the card count is not a multiple of the fitted column count. */
+.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;
+ background:var(--rule);border:1px solid var(--rule);border-radius:3px;overflow:hidden;margin:26px 0}
+@media(max-width:640px){.cards{grid-template-columns:1fr}}
+.card{padding:19px 21px}
+.card .v{font-size:29px}
+.card{background:var(--surface);padding:15px 17px}
+.card .k{font-size:11.5px;color:var(--muted);margin-bottom:5px;letter-spacing:.02em}
+.card .v{font-size:24px;font-weight:650;letter-spacing:-.02em;line-height:1.15}
+.card .s{font-size:11.5px;color:var(--muted);margin-top:3px;font-variant-numeric:tabular-nums}
+.card .v.pos{color:var(--good)}.card .v.neg{color:var(--crit)}
+figure{margin:34px 0;background:var(--surface);border:1px solid var(--rule);
+ border-radius:3px;padding:22px 24px 16px}
+.fignum{font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);
+ font-weight:650;margin-bottom:5px}
+.figtitle{font-size:16px;font-weight:640;color:var(--ink);margin-bottom:3px;letter-spacing:-.012em}
+.figsub{font-size:13px;color:var(--ink2);margin-bottom:16px;max-width:72ch}
+figcaption{font-size:12px;color:var(--muted);margin-top:13px;padding-top:11px;
+ border-top:1px solid var(--grid);max-width:78ch;line-height:1.6}
+figcaption b{color:var(--ink2);font-weight:600}
+.legend{display:flex;gap:20px;flex-wrap:wrap;font-size:12.5px;color:var(--ink2);margin:0 0 12px}
+.key{width:10px;height:10px;border-radius:2px;display:inline-block;margin-right:6px;vertical-align:0}
+.key.round{border-radius:50%}
+/* Tables are first-class content here, not a fallback for a missing chart:
+   they get the same surface, border and vertical rhythm as a figure. */
+.tbl{background:var(--surface);border:1px solid var(--rule);border-radius:3px;
+ padding:20px 22px 12px;margin:30px 0}
+.tbl .tnum{font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;
+ color:var(--accent);font-weight:650;margin-bottom:5px}
+.tbl .ttitle{font-size:15.5px;font-weight:640;color:var(--ink);margin-bottom:14px;
+ letter-spacing:-.012em}
+.scroll{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:13.5px;font-variant-numeric:tabular-nums}
+caption{text-align:left;font-size:12.5px;color:var(--muted);padding:10px 0 0;
+ caption-side:bottom;line-height:1.6}
+th,td{padding:9px 14px;border-bottom:1px solid var(--grid);text-align:right;white-space:nowrap}
+thead th{color:var(--muted);font-weight:620;border-bottom:1px solid var(--ink2);
+ font-size:11px;letter-spacing:.07em;text-transform:uppercase;padding-bottom:7px}
+tbody tr:last-child td,tbody tr:last-child th{border-bottom:none}
+tbody th,td.l,th.l{text-align:left;font-weight:500;color:var(--ink2);white-space:normal}
+tbody tr:hover{background:var(--accent-soft)}
+tr.hi{background:var(--accent-soft)}
+tr.hi td,tr.hi th{font-weight:650;color:var(--ink);box-shadow:inset 3px 0 0 var(--accent)}
+details{margin:30px 0}
+details>summary{cursor:pointer;font-size:13.5px;color:var(--accent);font-weight:600;
+ padding:11px 16px;background:var(--surface);border:1px solid var(--rule);border-radius:3px;
+ list-style:none}
+details>summary::-webkit-details-marker{display:none}
+details>summary::before{content:"▸ ";color:var(--muted)}
+details[open]>summary::before{content:"▾ "}
+details[open]>summary{border-radius:3px 3px 0 0;border-bottom:none}
+details .tbl{margin:0;border-radius:0 0 3px 3px}
+td.note{text-align:left;color:var(--muted);font-size:12px;white-space:normal}
+.grid1{stroke:var(--grid);stroke-width:1}
+.axis{fill:var(--muted);font-size:11px;font-variant-numeric:tabular-nums}
+.axist{fill:var(--ink2);font-size:12px}
+.dlabel{fill:var(--ink);font-size:11.5px;font-weight:640}
+.mid{text-anchor:middle}.end{text-anchor:end}.start{text-anchor:start}
+.ring{stroke:var(--surface);stroke-width:2}
+footer{margin-top:64px;padding-top:18px;border-top:1px solid var(--rule);
+ font-size:12px;color:var(--muted)}
+@media print{
+ body{background:#fff;font-size:10.5pt}
+ main{max-width:none;padding:0}
+ figure,.cards,.abstract,.callout{break-inside:avoid;border-color:#bbb}
+ h2{break-after:avoid}figcaption{break-before:avoid}
+ tbody tr:hover{background:none}
+}
+@media(max-width:640px){h1{font-size:26px}main{padding:0 15px 60px}.card .v{font-size:20px}}
+</style>
+<main>
+<header class="doc"><div class="kicker">Pairs · head-to-head</div><h1>CCF / UMC 對 QFF / TSM 對照報告</h1><p class="standfirst">兩個配對在同一段共同視窗、各自以自己量測的盤口寬度定價後的正面比較。核心問題不是誰的數字大，而是差距是否大於這個樣本的雜訊。</p><div class="meta"><span><b>共同視窗</b> 2026-07-06 → 2026-08-15</span><span><b>重疊 session</b> 28</span><span><b>Bootstrap</b> 20,000 次重抽樣</span></div></header>
+<div class="abstract"><h3>摘要</h3><p><strong>點估計偏向 CCF / UMC，但統計上不足以宣稱勝出。</strong>在 28 個重疊 session 上，Sharpe 差距為 <strong>+6.52</strong>，其 95% bootstrap 信賴區間為 <strong>[-1.49, +15.24]</strong>，而 QFF / TSM 在 <strong>5.4%</strong> 的重抽樣中勝出。五週的樣本分不開這兩個策略。</p><p>真正撐得住的是<strong>網格穩健度</strong>：CCF / UMC 在 96/100 格淨利為正、Sharpe 中位 4.69；QFF / TSM 為 64/100 格、中位 1.24。這個比較建立在每邊上百格的分布上，而非單一組態，因此比任何單格 Sharpe 都穩固。</p><p>兩者日報酬相關僅 <strong>+0.148</strong>，50/50 混合的 Sharpe 為 <strong>11.40</strong>。QFF / TSM 的價值在於分散，而不是單獨取代。</p></div>
+<h2><span class="num">1</span>共同視窗上的正面比較</h2>
+<p>兩邊都在 2026-07-06 之後評分。這個起點不是任意的：QFF 的最小跳動單位在 2026-07-05 由 5 TWD 降為 1 TWD，過價成本一次降掉八成，單一位移參數跨不過那個斷點。每個配對各自跑完整網格、套用同一組篩選門檻，再取各自的最佳組態比較。</p>
+<div class="tbl"><div class="tnum">Table 1</div><div class="ttitle">共同視窗上的正面比較</div><div class="scroll"><table><thead><tr><th class="l">項目</th><th>CCF / UMC</th><th>QFF / TSM</th><th class="l">說明</th></tr></thead><tbody><tr><td class="l">最佳組態</td><td>w2500 / e1 / x0.5</td><td>w1560 / e2 / x0</td><td class="l">各自網格篩選後的第一名</td></tr><tr><td class="l">單邊位移</td><td>0.2151</td><td>0.0755</td><td class="l">spread 單位，各自量測</td></tr><tr><td class="l">期間</td><td>39 日曆日</td><td>40 日曆日</td><td class="l"></td></tr><tr><td class="l">交易筆數</td><td>18</td><td>21</td><td class="l"></td></tr><tr><td class="l">淨利</td><td>214,290</td><td>59,458</td><td class="l">TWD</td></tr><tr><td class="l">報酬</td><td>10.71%</td><td>2.97%</td><td class="l">以 2M 資本計</td></tr><tr><td class="l">Sharpe</td><td>11.32</td><td>4.80</td><td class="l">252 日年化，日報酬</td></tr><tr><td class="l">最大回撤</td><td>-2.07%</td><td>-1.59%</td><td class="l"></td></tr><tr><td class="l">勝率</td><td>100%</td><td>86%</td><td class="l">樣本過小，描述性數字</td></tr><tr><td class="l">每筆淨利中位</td><td>10,281</td><td>3,231</td><td class="l">TWD，兩者接近</td></tr><tr><td class="l">成本 / 毛利</td><td>31.4%</td><td>52.7%</td><td class="l">接近相同，所以差距來自 edge 而非成本</td></tr><tr><td class="l">過價 / 總成本</td><td>78.3%</td><td>46.0%</td><td class="l">CCF 的盤口主導其成本</td></tr><tr><td class="l">每口中位邊際</td><td>3.02 ticks</td><td>8.08 ticks</td><td class="l">QFF 遠離微結構雜訊</td></tr><tr><td class="l">跨週末部位</td><td>7 / 18</td><td>0 / 21</td><td class="l">回測看不見閉市期間的風險</td></tr><tr><td class="l">在場時間</td><td>79.5%</td><td>32.9%</td><td class="l"></td></tr></tbody></table></div><caption>兩邊各自以自己量測的盤口寬度定價，因此淨利可比，但成本組成不可互換解讀。</caption></div>
+<h2><span class="num">2</span>差距有多少是雜訊</h2>
+<p>把 28 個重疊 session 的日報酬整段重抽樣 20,000 次，每次重算兩邊的 Sharpe 再取差，得到差距本身的分布。這是本報告唯一能回答「這個排名可信嗎」的統計。</p>
+<figure><div class="fignum">Figure 1</div><div class="figtitle">Sharpe 差距的 bootstrap 分布</div><div class="figsub">CCF / UMC 減 QFF / TSM 的 Sharpe 差。虛線為 95% 區間，實線為零。</div><svg viewBox="0 0 940 260" width="100%" style="display:block" role="img" aria-label="bootstrap distribution of the Sharpe gap between the two pairs"><line x1="56" y1="214.0" x2="916" y2="214.0" class="grid1"/><text x="45" y="218.0" class="axis end">0</text><line x1="56" y1="152.7" x2="916" y2="152.7" class="grid1"/><text x="45" y="156.7" class="axis end">500</text><line x1="56" y1="91.3" x2="916" y2="91.3" class="grid1"/><text x="45" y="95.3" class="axis end">1000</text><line x1="56" y1="30.0" x2="916" y2="30.0" class="grid1"/><text x="45" y="34.0" class="axis end">1500</text><rect x="57.0" y="213.9" width="17.5" height="0.1" rx="3" fill="var(--s1)"><title>-11.9 to -11.1 : 1 trades</title></rect><rect x="76.5" y="213.9" width="17.5" height="0.1" rx="3" fill="var(--s1)"><title>-11.1 to -10.2 : 1 trades</title></rect><rect x="96.1" y="213.9" width="17.5" height="0.1" rx="3" fill="var(--s1)"><title>-10.2 to -9.4 : 1 trades</title></rect><rect x="115.6" y="213.6" width="17.5" height="0.4" rx="3" fill="var(--s1)"><title>-9.4 to -8.5 : 3 trades</title></rect><rect x="135.2" y="213.6" width="17.5" height="0.4" rx="3" fill="var(--s1)"><title>-8.5 to -7.7 : 3 trades</title></rect><rect x="154.7" y="212.9" width="17.5" height="1.1" rx="3" fill="var(--s1)"><title>-7.7 to -6.8 : 9 trades</title></rect><rect x="174.3" y="211.7" width="17.5" height="2.3" rx="3" fill="var(--s1)"><title>-6.8 to -6.0 : 19 trades</title></rect><rect x="193.8" y="210.0" width="17.5" height="4.0" rx="3" fill="var(--s1)"><title>-6.0 to -5.1 : 33 trades</title></rect><rect x="213.4" y="209.5" width="17.5" height="4.5" rx="3" fill="var(--s1)"><title>-5.1 to -4.3 : 37 trades</title></rect><rect x="232.9" y="206.9" width="17.5" height="7.1" rx="3" fill="var(--s1)"><title>-4.3 to -3.4 : 58 trades</title></rect><rect x="252.5" y="201.1" width="17.5" height="12.9" rx="3" fill="var(--s1)"><title>-3.4 to -2.6 : 105 trades</title></rect><rect x="272.0" y="192.3" width="17.5" height="21.7" rx="3" fill="var(--s1)"><title>-2.6 to -1.7 : 177 trades</title></rect><rect x="291.5" y="183.3" width="17.5" height="30.7" rx="3" fill="var(--s1)"><title>-1.7 to -0.9 : 250 trades</title></rect><rect x="311.1" y="168.4" width="17.5" height="45.6" rx="3" fill="var(--s1)"><title>-0.9 to -0.0 : 372 trades</title></rect><rect x="330.6" y="152.9" width="17.5" height="61.1" rx="3" fill="var(--s1)"><title>-0.0 to 0.8 : 498 trades</title></rect><rect x="350.2" y="126.9" width="17.5" height="87.1" rx="3" fill="var(--s1)"><title>0.8 to 1.7 : 710 trades</title></rect><rect x="369.7" y="113.6" width="17.5" height="100.4" rx="3" fill="var(--s1)"><title>1.7 to 2.5 : 818 trades</title></rect><rect x="389.3" y="82.6" width="17.5" height="131.4" rx="3" fill="var(--s1)"><title>2.5 to 3.4 : 1071 trades</title></rect><rect x="408.8" y="58.3" width="17.5" height="155.7" rx="3" fill="var(--s1)"><title>3.4 to 4.2 : 1269 trades</title></rect><rect x="428.4" y="40.0" width="17.5" height="174.0" rx="3" fill="var(--s1)"><title>4.2 to 5.1 : 1418 trades</title></rect><rect x="447.9" y="29.7" width="17.5" height="184.3" rx="3" fill="var(--s1)"><title>5.1 to 5.9 : 1502 trades</title></rect><rect x="467.5" y="14.0" width="17.5" height="200.0" rx="3" fill="var(--s1)"><title>5.9 to 6.8 : 1630 trades</title></rect><rect x="487.0" y="18.4" width="17.5" height="195.6" rx="3" fill="var(--s1)"><title>6.8 to 7.6 : 1594 trades</title></rect><rect x="506.5" y="17.4" width="17.5" height="196.6" rx="3" fill="var(--s1)"><title>7.6 to 8.5 : 1602 trades</title></rect><rect x="526.1" y="38.7" width="17.5" height="175.3" rx="3" fill="var(--s1)"><title>8.5 to 9.3 : 1429 trades</title></rect><rect x="545.6" y="62.7" width="17.5" height="151.3" rx="3" fill="var(--s1)"><title>9.3 to 10.2 : 1233 trades</title></rect><rect x="565.2" y="88.4" width="17.5" height="125.6" rx="3" fill="var(--s1)"><title>10.2 to 11.0 : 1024 trades</title></rect><rect x="584.7" y="105.4" width="17.5" height="108.6" rx="3" fill="var(--s1)"><title>11.0 to 11.9 : 885 trades</title></rect><rect x="604.3" y="133.4" width="17.5" height="80.6" rx="3" fill="var(--s1)"><title>11.9 to 12.7 : 657 trades</title></rect><rect x="623.8" y="154.1" width="17.5" height="59.9" rx="3" fill="var(--s1)"><title>12.7 to 13.6 : 488 trades</title></rect><rect x="643.4" y="170.0" width="17.5" height="44.0" rx="3" fill="var(--s1)"><title>13.6 to 14.4 : 359 trades</title></rect><rect x="662.9" y="183.0" width="17.5" height="31.0" rx="3" fill="var(--s1)"><title>14.4 to 15.3 : 253 trades</title></rect><rect x="682.5" y="192.7" width="17.5" height="21.3" rx="3" fill="var(--s1)"><title>15.3 to 16.1 : 174 trades</title></rect><rect x="702.0" y="197.8" width="17.5" height="16.2" rx="3" fill="var(--s1)"><title>16.1 to 17.0 : 132 trades</title></rect><rect x="721.5" y="204.1" width="17.5" height="9.9" rx="3" fill="var(--s1)"><title>17.0 to 17.8 : 81 trades</title></rect><rect x="741.1" y="208.5" width="17.5" height="5.5" rx="3" fill="var(--s1)"><title>17.8 to 18.7 : 45 trades</title></rect><rect x="760.6" y="211.3" width="17.5" height="2.7" rx="3" fill="var(--s1)"><title>18.7 to 19.5 : 22 trades</title></rect><rect x="780.2" y="212.8" width="17.5" height="1.2" rx="3" fill="var(--s1)"><title>19.5 to 20.4 : 10 trades</title></rect><rect x="799.7" y="212.4" width="17.5" height="1.6" rx="3" fill="var(--s1)"><title>20.4 to 21.2 : 13 trades</title></rect><rect x="819.3" y="213.3" width="17.5" height="0.7" rx="3" fill="var(--s1)"><title>21.2 to 22.1 : 6 trades</title></rect><rect x="838.8" y="213.8" width="17.5" height="0.2" rx="3" fill="var(--s1)"><title>22.1 to 22.9 : 2 trades</title></rect><rect x="858.4" y="213.5" width="17.5" height="0.5" rx="3" fill="var(--s1)"><title>22.9 to 23.8 : 4 trades</title></rect><rect x="897.5" y="213.8" width="17.5" height="0.2" rx="3" fill="var(--s1)"><title>24.6 to 25.5 : 2 trades</title></rect><line x1="330.1" y1="14" x2="330.1" y2="214" stroke="var(--ink2)" stroke-width="1"/><text x="336.1" y="27" class="axis start">0</text><text x="99.9" y="238" class="axis mid">-10</text><text x="330.1" y="238" class="axis mid">0</text><text x="560.2" y="238" class="axis mid">10</text><text x="790.4" y="238" class="axis mid">20</text><text x="486" y="256" class="axist mid">Sharpe 差（CCF / UMC − QFF / TSM）</text></svg><figcaption>分布橫跨零：區間 <b>[-1.49, +15.24]</b>，落在零以下的比例為 <b>5.4%</b>。點估計是實數，但它與零之間的距離小於樣本雜訊，因此不足以據此選邊。 <b>Source:</b> 兩配對的日報酬序列</figcaption></figure>
+<h2><span class="num">3</span>網格穩健度：撐得住的那個比較</h2>
+<p>單一組態的 Sharpe 受選參與運氣影響很大，整片網格的分布則不然。同一組 window × entry_z × exit_z 掃描套在兩個配對上，問的是「這個 edge 是否在參數選擇下普遍存在」。</p>
+<div class="tbl"><div class="tnum">Table 2</div><div class="ttitle">網格分布比較</div><div class="scroll"><table><thead><tr><th class="l">指標</th><th>CCF / UMC</th><th>QFF / TSM</th></tr></thead><tbody><tr><td class="l">淨利為正的格數</td><td>96/100</td><td>64/100</td></tr><tr><td class="l">Sharpe 中位數</td><td>4.69</td><td>1.24</td></tr><tr><td class="l">Sharpe > 3 的格數</td><td>84/100</td><td>20/100</td></tr><tr><td class="l">通過篩選的格數</td><td>5/100</td><td>1/100</td></tr><tr><td class="l">淨利中位數 TWD</td><td>100,597</td><td>24,879</td></tr></tbody></table></div><caption>篩選門檻與各配對報告相同：交易 ≥ 15 筆、每口中位邊際 ≥ 2 ticks、一個 tick 以內 ≤ 15%、鄰域 Sharpe ≥ 該網格中位數。</caption></div>
+<h2><span class="num">4</span>分散價值</h2>
+<p>兩者日報酬相關 <strong>+0.148</strong>，接近無關。等權混合後：</p>
+<div class="tbl"><div class="tnum">Table 3</div><div class="ttitle">等權混合</div><div class="scroll"><table><thead><tr><th class="l">組合</th><th>Sharpe</th><th>區間內最大回撤</th></tr></thead><tbody><tr><td class="l">CCF / UMC</td><td>11.32</td><td>-0.58%</td></tr><tr><td class="l">QFF / TSM</td><td>4.80</td><td>-0.77%</td></tr><tr class="hi"><td class="l">50 / 50 混合</td><td>11.40</td><td>-0.37%</td></tr></tbody></table></div><caption>以重疊 session 的日報酬計算，缺漏日以 0 補。混合的 Sharpe 高於單押 CCF / UMC。</caption></div>
+<h2><span class="num">5</span>保留</h2>
+<div class="callout"><h3>這份比較不能回答什麼</h3><p><strong>樣本。</strong>28 個重疊 session、18 與 21 筆交易。任何排名都在雜訊帶內。</p><p><strong>風險不對稱。</strong>兩者的在場時間與跨週末部位數差距明顯，而回測只在 session 內對部位計價，閉市期間的不利波動與保證金壓力不在模型內。報酬相同不代表風險相同。</p><p><strong>皆為樣本內。</strong>兩邊的組態都是在同一段資料上選出的，沒有任何樣本外驗證。網格穩健度是本報告中最不受此影響的指標。</p></div>
+<footer>由 <code>scripts/generate_comparison_report.py</code> 產生，所有數字於產生時重新計算。</footer>
+</main>
