@@ -65,7 +65,12 @@ def evaluate(spec: pair.PairSpec) -> dict:
         for a, b in zip(trades["entry_time"], trades["exit_time"])
     )
     r = daily(res.equity)
+    notional = float(trades["actual_leg_notional_twd"].sum())
     return dict(
+        cost_bps=float(trades["total_fee_twd"].sum() / notional * 10000.0),
+        cross_bps=float(trades["crossing_cost_twd"].sum() / notional * 10000.0),
+        gross_x=float(trades["actual_leg_notional_twd"].median() * 2 / pair.CAPITAL),
+        ann=float(s["return_pct"]) * 365.0 / days,
         spec=spec, grid=g, surv=surv, pick=pick, res=res, trades=trades,
         summary=s, daily=r, sharpe=sharpe(r), days=days, weekend=weekend,
         disp=seg.displacement,
@@ -106,6 +111,7 @@ def main(argv: list[str]) -> int:
             "Pairs · head-to-head",
             "CCF / UMC 對 QFF / TSM 對照報告",
             "兩個配對在同一段共同視窗、各自以自己量測的盤口寬度定價後的正面比較。"
+            "皆為 no leverage，結果以資本百分比與腿名目 bps 表示。"
             "核心問題不是誰的數字大，而是差距是否大於這個樣本的雜訊。",
             [
                 ("共同視窗", f"{COMMON_START} → {a['summary']['end'][:10]}"),
@@ -157,20 +163,24 @@ def main(argv: list[str]) -> int:
         row("單邊位移", f"{a['disp']:.4f}", f"{b['disp']:.4f}", "spread 單位，各自量測"),
         row("期間", f"{a['days']:.0f} 日曆日", f"{b['days']:.0f} 日曆日", ""),
         row("交易筆數", f"{len(a['trades'])}", f"{len(b['trades'])}", ""),
-        row("淨利", f"{a['summary']['net_pnl_twd']:,.0f}", f"{b['summary']['net_pnl_twd']:,.0f}", "TWD"),
-        row("報酬", f"{a['summary']['return_pct'] * 100:.2f}%", f"{b['summary']['return_pct'] * 100:.2f}%",
-            "以 2M 資本計"),
+        row("總報酬", f"{a['summary']['return_pct'] * 100:.2f}%",
+            f"{b['summary']['return_pct'] * 100:.2f}%", "資本百分比，no leverage"),
+        row("線性年化", f"{a['ann'] * 100:.1f}%", f"{b['ann'] * 100:.1f}%",
+            "外插而非預測，樣本僅五週"),
+        row("名目 / 資本", f"{a['gross_x']:.2f}x", f"{b['gross_x']:.2f}x",
+            "兩腿等名目反向，淨曝險約為零"),
         row("Sharpe", f"{a['sharpe']:.2f}", f"{b['sharpe']:.2f}", "252 日年化，日報酬"),
         row("最大回撤", f"{a['summary']['max_drawdown_pct'] * 100:.2f}%",
             f"{b['summary']['max_drawdown_pct'] * 100:.2f}%", ""),
         row("勝率", f"{(a['trades'].net_pnl_twd > 0).mean() * 100:.0f}%",
             f"{(b['trades'].net_pnl_twd > 0).mean() * 100:.0f}%", "樣本過小，描述性數字"),
-        row("每筆淨利中位", f"{a['trades'].net_pnl_twd.median():,.0f}",
-            f"{b['trades'].net_pnl_twd.median():,.0f}", "TWD，兩者接近"),
+        row("每筆報酬中位", f"{a['trades'].ret_bps.median():.1f} bps",
+            f"{b['trades'].ret_bps.median():.1f} bps", "腿名目 bps，兩者接近"),
+        row("全部成本（來回）", f"{a['cost_bps']:.1f} bps", f"{b['cost_bps']:.1f} bps", "腿名目"),
+        row("其中盤口價差", f"{a['cross_bps']:.1f} bps", f"{b['cross_bps']:.1f} bps",
+            f"佔 {a['cross_share'] * 100:.0f}% / {b['cross_share'] * 100:.0f}%，CCF 的盤口主導其成本"),
         row("成本 / 毛利", f"{a['fee_gross'] * 100:.1f}%", f"{b['fee_gross'] * 100:.1f}%",
             "接近相同，所以差距來自 edge 而非成本"),
-        row("盤口價差 / 總成本", f"{a['cross_share'] * 100:.1f}%", f"{b['cross_share'] * 100:.1f}%",
-            "CCF 的盤口主導其成本"),
         row("每口中位邊際", f"{a['trades'].ticks.median():.2f} ticks",
             f"{b['trades'].ticks.median():.2f} ticks", "QFF 遠離微結構雜訊"),
         row("跨週末部位", f"{a['weekend']} / {len(a['trades'])}",
@@ -224,7 +234,7 @@ def main(argv: list[str]) -> int:
         ("Sharpe > 3 的格數", f"{int((a['grid'].sharpe > 3).sum())}/{len(a['grid'])}",
          f"{int((b['grid'].sharpe > 3).sum())}/{len(b['grid'])}"),
         ("通過篩選的格數", f"{len(a['surv'])}/{len(a['grid'])}", f"{len(b['surv'])}/{len(b['grid'])}"),
-        ("淨利中位數 TWD", f"{a['grid'].net.median():,.0f}", f"{b['grid'].net.median():,.0f}"),
+        ("報酬中位數", f"{a['grid'].ret.median() * 100:.2f}%", f"{b['grid'].ret.median() * 100:.2f}%"),
     ]:
         grows.append([label, ga, gb])
     body.append(
