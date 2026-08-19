@@ -29,9 +29,24 @@ one percent of leg notional -- hence the /100 in fill_costs -- and because the
 spread is already a relative quantity across both legs, charging it once on one
 leg's notional covers both books.
 
-Measured on CCF/UMC from the live tick log (2026-08-05, 17,417 quotes): CCF's
-book is one tick wide 98.2% of the time and UMC's one cent 99.9%, which is
-0.2151 spread units per side and 43 bps per round trip.
+Measured on CCF/UMC twice, by different methods, and they agree to 8%:
+
+  2026-08-05, 17,417 quotes, from tick-width frequency -- CCF's book is one
+  tick wide 98.2% of the time and UMC's one cent 99.9% -- giving 0.2151 per
+  side, 43.0 bps per round trip.
+
+  2026-08-19, 2,618 minute bars over 2026-08-07..19, from the realised width
+  itself: half of (long_spread - short_spread) as the live system computes
+  them. p50 0.2317, mean 0.2375, p25 0.2254, p90 0.2433 -- 0.2317 per side,
+  46.3 bps per round trip. The default follows this one: it measures the width
+  that was actually there rather than how often it was the minimum, over
+  thirteen sessions rather than one.
+
+The book is symmetric (the two sides sit 0.2314 and 0.2328 from mid, a 0.0013
+difference), which is what lets one parameter stand for both, and it does not
+widen in the thin hours -- 21h through 03h span 0.2306 to 0.2325, a ratio of
+1.01 -- so a constant is the right shape, not an average over something that
+moves.
 
 Rules that read raw spread levels rather than z -- frozen_mean_exit and
 drift_bail_c -- have no displaced reference and are rejected outright when the
@@ -300,8 +315,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
             "book width in spread units: entry and exit thresholds each move by "
             "displacement/spread_std of that bar, and the same displacement is "
             "charged per side as crossing cost. 0 (default) keeps mid pricing. "
-            "Measured 0.2151 for CCF/UMC (CCF one tick + UMC one cent = 43 bps "
-            "round trip)."
+            "Measured 0.2317 for CCF/UMC from 2,618 live minute bars (46.3 bps "
+            "round trip); an earlier tick-width estimate gave 0.2151."
         ),
     )
     parser.add_argument(

@@ -83,9 +83,11 @@ PAIRS = {
         legs_zh="TAIFEX CCF（UMC 股票期貨）與其在 NYSE 掛牌的 UMC ADR",
         segments=[
             Segment(
-                "全期間", None, None, 0.2151,
-                "CCF 一個 tick 寬佔 98.2% 的時間，UMC 一美分佔 99.9%；"
-                "單邊位移 0.2151 spread 單位，來回 43.0 bps。",
+                "全期間", None, None, 0.2317,
+                "由 2,618 根實盤分鐘 bar（2026-08-07~19）直接量測盤口寬度："
+                "單邊位移 0.2317 spread 單位，來回 46.3 bps。"
+                "先前以 tick 寬度出現頻率推得 0.2151（CCF 一個 tick 佔 98.2%、"
+                "UMC 一美分佔 99.9%），兩種量法相差 8%。",
             )
         ],
     ),
