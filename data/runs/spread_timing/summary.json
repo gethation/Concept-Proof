@@ -1,0 +1,96 @@
+{
+  "parameters": {
+    "window": 3900,
+    "entry_z": 2.0,
+    "exit_z": -0.25,
+    "open_window_minutes": 30,
+    "trades": 21
+  },
+  "exit_timing": {
+    "trades": 21,
+    "open_window_minutes": 30,
+    "entry_min_median": 8.0,
+    "exit_min_median": 19.0,
+    "exits_at_open": 11,
+    "sessions_held_median": 2.0,
+    "capture_pts_total": 44.23505047157346,
+    "overnight_pts_total": 22.78779628010429,
+    "intraday_pts_total": 21.447254191469174,
+    "overnight_share_of_capture": 0.5151524873866323,
+    "trades_overnight_dominant": 10,
+    "defer_counterfactual": {
+      "n": 9,
+      "mean_delta_pts": -0.5802275538871714,
+      "median_delta_pts": -0.21363398935065714,
+      "sum_delta_pts": -5.222047984984543,
+      "improved": 3,
+      "crossing_weekend": 5
+    }
+  },
+  "sign_asymmetry": {
+    "session_dev_positive": {
+      "slope": -0.4656394165204955,
+      "slope_se": 0.13024147496429658,
+      "slope_t": -3.5752007311660314,
+      "intercept": 0.22429470865132575,
+      "n": 64,
+      "mean_abs_dev": 1.0609720364672586
+    },
+    "session_dev_negative": {
+      "slope": -0.4305453540308685,
+      "slope_se": 0.12532849976629104,
+      "slope_t": -3.4353347788710233,
+      "intercept": -0.09212575439390519,
+      "n": 75,
+      "mean_abs_dev": 0.9054874564015825
+    },
+    "session_share_dev_positive": 0.460431654676259,
+    "minute_dev_positive": {
+      "slope": -0.007699458459999252,
+      "slope_se": 0.0012779249175370532,
+      "slope_t": -6.0249693501856365,
+      "intercept": 0.00035904568896403584,
+      "n": 22579,
+      "half_life_minutes": 90.02544583635725
+    },
+    "minute_dev_negative": {
+      "slope": -0.01189444323276881,
+      "slope_se": 0.001661987636772046,
+      "slope_t": -7.156757950300097,
+      "intercept": -0.0028718524755460243,
+      "n": 23711,
+      "half_life_minutes": 58.274873989086515
+    },
+    "minute_share_dev_positive": 0.48777273709224456
+  },
+  "entry_hour": {
+    "signal_bars": 453,
+    "note": "bar-level forward stats; QFF/TSM history shows these can flip sign at trade level, see trade_check",
+    "trade_check_by_entry_hour": [
+      {
+        "bucket_min": 0,
+        "n": 16,
+        "mean_pnl": 14564.515336842653,
+        "total_pnl": 233032.24538948244
+      },
+      {
+        "bucket_min": 60,
+        "n": 3,
+        "mean_pnl": 18854.741656704708,
+        "total_pnl": 56564.22497011412
+      },
+      {
+        "bucket_min": 180,
+        "n": 1,
+        "mean_pnl": 8921.480533623733,
+        "total_pnl": 8921.480533623733
+      },
+      {
+        "bucket_min": 300,
+        "n": 1,
+        "mean_pnl": 21075.68163372489,
+        "total_pnl": 21075.68163372489
+      }
+    ]
+  }
+}
