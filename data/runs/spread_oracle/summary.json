@@ -1,0 +1,84 @@
+{
+  "parameters": {
+    "displacement": 0.2317,
+    "ref_price": 121.5,
+    "us_fee_pts_per_side": 0.025,
+    "qff_fee_twd": 88.0,
+    "bars": 58108,
+    "days": 231.22847222222222,
+    "fill": "bar close (engine fills next-bar open; ~1-3% of net)"
+  },
+  "cost_ladder": {
+    "fees_only": {
+      "profit_pts": 2458.174599554413,
+      "profit_twd_at_1m_leg": 24581745.995544128,
+      "return_pct_of_capital": 1229.0872997772065,
+      "annualised_linear_pct": 1940.1454332472385,
+      "trades": 7922
+    },
+    "half_disp": {
+      "profit_pts": 1190.1123448315452,
+      "profit_twd_at_1m_leg": 11901123.448315453,
+      "return_pct_of_capital": 595.0561724157726,
+      "annualised_linear_pct": 939.3112398503467,
+      "trades": 3305
+    },
+    "full_disp": {
+      "profit_pts": 666.2677171618601,
+      "profit_twd_at_1m_leg": 6662677.171618601,
+      "return_pct_of_capital": 333.13385858093005,
+      "annualised_linear_pct": 525.8602334455666,
+      "trades": 1567
+    },
+    "double_disp": {
+      "profit_pts": 291.2698594685884,
+      "profit_twd_at_1m_leg": 2912698.5946858837,
+      "return_pct_of_capital": 145.6349297342942,
+      "annualised_linear_pct": 229.88842525383754,
+      "trades": 417
+    }
+  },
+  "oracle_1x": {
+    "total_pts": 666.2677171618602,
+    "trade_count": 1567,
+    "net_pts_median": 0.30254394690435266,
+    "hold_minutes_median": 11.0,
+    "sessions_held_median": 1.0,
+    "profit_by_duration_pts": {
+      "within_1_session": 506.7983393159002,
+      "2_sessions": 139.75339432230166,
+      "3_to_5_sessions": 19.715983523658398,
+      "over_5_sessions": 0.0
+    },
+    "monthly_pts": {
+      "2026-01": 37.12715728926594,
+      "2026-02": 11.95050260798609,
+      "2026-03": 16.31145955346003,
+      "2026-04": 31.350785172586356,
+      "2026-05": 109.92312611030432,
+      "2026-06": 199.8192985881844,
+      "2026-07": 181.715299063968,
+      "2026-08": 78.07008877610514
+    },
+    "top_trades_cum_pts": {
+      "top_21": 59.330038676284076,
+      "top_50": 111.48845376855843,
+      "top_100": 171.69985666240746
+    }
+  },
+  "oracle_daily_close_only": {
+    "profit_pts": 60.690172850058936,
+    "profit_twd_at_1m_leg": 606901.7285005894,
+    "return_pct_of_capital": 30.34508642502947,
+    "annualised_linear_pct": 47.90048750783254,
+    "trades": 35,
+    "decision_points": 149
+  },
+  "capture": {
+    "canonical_trades": 21,
+    "canonical_net_pts": 31.959363252694516,
+    "canonical_net_twd": 319593.63252694515,
+    "capture_ratio_vs_oracle": 0.04796774994417213,
+    "oracle_top21_vs_canonical": 1.8564211748268145
+  }
+}
