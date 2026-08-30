@@ -63,6 +63,26 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="Re-download zip files even when cached copies exist.",
     )
     parser.add_argument(
+        "--from-cache",
+        action="store_true",
+        help=(
+            "Build from every zip already in --raw-dir instead of the current "
+            "30-trading-day window. This is the only route to history TAIFEX "
+            "has stopped publishing: drop a purchased archive into --raw-dir "
+            "and the merge folds it in under the same rules as a live fetch."
+        ),
+    )
+    parser.add_argument(
+        "--max-gap-days",
+        type=int,
+        default=5,
+        help=(
+            "With --from-cache, the widest calendar gap tolerated between "
+            "cached trade dates. Raise it deliberately for a known closure "
+            "such as Lunar New Year, and only after checking the gap is one."
+        ),
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Fetch and report what would change without writing the cumulative file.",
@@ -104,7 +124,16 @@ def report_conflicts(existing: pd.DataFrame, fresh: pd.DataFrame) -> int:
     for column in ("open", "high", "low", "close", "volume", "contract_month"):
         old, new = overlap[f"{column}_old"], overlap[f"{column}_new"]
         if column == "contract_month":
-            differs |= old.astype(str) != new.astype(str)
+            # Compare as numbers when both sides parse: read_csv types a column
+            # of 202601 as int here and float there, so astype(str) made
+            # "202601" and "202601.0" differ and every single overlapping
+            # minute was reported as a conflict -- 90k false alarms that would
+            # bury a real one.
+            old_num = pd.to_numeric(old, errors="coerce")
+            new_num = pd.to_numeric(new, errors="coerce")
+            both_numeric = old_num.notna() & new_num.notna()
+            differs |= both_numeric & (old_num != new_num)
+            differs |= ~both_numeric & (old.astype(str) != new.astype(str))
         else:
             differs |= ~pd.Series(
                 [
@@ -134,6 +163,58 @@ def session_days(frame: pd.DataFrame) -> pd.Series:
     timestamps = pd.DatetimeIndex(frame["timestamp"])
     shifted = timestamps - pd.Timedelta(hours=6)
     return pd.Series(shifted.date, index=frame.index)
+
+
+def boundary_session_days(frame: pd.DataFrame) -> set:
+    """Session days a fetch can only half-cover, so must not wholesale replace.
+
+    TAIFEX files a night session under the FOLLOWING trade date, so session day
+    D needs the zip named D (its day half) and the zip named D+1 (its night
+    half). A fetch is therefore half-blind at every edge of its own coverage,
+    not just at the start: the oldest day arrives without its day session, the
+    newest without its night session, and the same happens on both sides of any
+    hole in the middle -- which is exactly what a purchased archive ending where
+    the free 30-day window has not yet begun produces.
+
+    Only the leading edge used to be protected. Merging an archive that stopped
+    on 2026-06-30 into a file already holding 07-01..07-07 replaced three
+    session days with the half the fetch happened to have and dropped 715
+    minutes that no source will ever serve again.
+
+    Returning a day here does not keep it stale: bars the fetch does supply
+    still win minute by minute. It only stops a half-covered day from deleting
+    the half it cannot replace.
+    """
+    days = sorted(set(session_days(frame)))
+    if not days:
+        return set()
+    boundary = {days[0], days[-1]}
+    # A weekend is three calendar days between session days; anything wider is
+    # a hole in the fetch, and the days on either side of it are half-covered.
+    for earlier, later in zip(days, days[1:]):
+        if (later - earlier).days > 3:
+            boundary.update({earlier, later})
+    return boundary
+
+
+def fresh_day_bounds(frame: pd.DataFrame) -> dict:
+    """First and last minute the fetch actually holds for each session day.
+
+    Replacement is bounded by these, per day, instead of by one global start.
+    A single global `fresh_start` only ever protected the day containing it:
+    on the trailing day, and on both sides of any interior hole, every existing
+    bar trivially sits after it, so the guard evaporated exactly where a fetch
+    is half-blind and the missing half was deleted for good.
+
+    Bounding per day needs no guess about which days are half-covered. A day
+    the fetch holds in full spans that day completely, so it still replaces
+    everything -- including a wrong-contract bar the fresh capture does not
+    reproduce, which is the case whole-day replacement exists for.
+    """
+    days = session_days(frame)
+    timestamps = pd.Series(pd.DatetimeIndex(frame["timestamp"]), index=frame.index)
+    grouped = timestamps.groupby(days)
+    return {day: (group.min(), group.max()) for day, group in grouped}
 
 
 def summarize(frame: pd.DataFrame, label: str) -> None:
@@ -167,6 +248,8 @@ def main(argv: list[str]) -> int:
         ]
         if args.refresh:
             fetch_argv.append("--refresh")
+        if args.from_cache:
+            fetch_argv += ["--from-cache", "--max-gap-days", str(args.max_gap_days)]
 
         print(f"\nFetching the current TAIFEX window for {product}...")
         exit_code = build_qff1_1m.main(fetch_argv)
@@ -194,19 +277,24 @@ def main(argv: list[str]) -> int:
     # following trade date, so the earliest session day arrives with its night
     # half only -- and replacing that day would delete the day session the fetch
     # was never going to supply.
-    fresh_start = pd.DatetimeIndex(fresh["timestamp"]).min()
     refetched_days = set(session_days(fresh))
-    partial_days = set(
-        session_days(fresh[pd.DatetimeIndex(fresh["timestamp"]) == fresh_start])
-    )
+    partial_days = boundary_session_days(fresh)
+    day_bounds = fresh_day_bounds(fresh)
     superseded = 0
     orphaned = 0
     if not existing.empty:
         existing_days = session_days(existing)
-        existing_ts = pd.DatetimeIndex(existing["timestamp"])
-        replaced_mask = existing_days.isin(refetched_days) & (
-            ~existing_days.isin(partial_days) | (existing_ts >= fresh_start)
+        existing_ts = pd.Series(
+            pd.DatetimeIndex(existing["timestamp"]), index=existing.index
         )
+        # Replace only inside the span the fetch actually covers for that same
+        # session day. Outside it the fetch has nothing to offer, so the old
+        # bars stay rather than being deleted by a capture that was never going
+        # to reproduce them.
+        lower = existing_days.map(lambda d: day_bounds.get(d, (None, None))[0])
+        upper = existing_days.map(lambda d: day_bounds.get(d, (None, None))[1])
+        covered = existing_days.isin(refetched_days) & lower.notna()
+        replaced_mask = covered & (existing_ts >= lower) & (existing_ts <= upper)
         superseded = int(replaced_mask.sum())
         # Bars the old capture had on a re-fetched day that the fresh capture
         # does not produce at all. Under the old per-minute union these were the
