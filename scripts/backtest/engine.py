@@ -67,7 +67,8 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from lib import paths  # noqa: E402
+from lib import ibkr_fees, paths  # noqa: E402
+from lib.pairs import ADR_SHARE_RATIO  # noqa: E402
 from lib.timeutil import TAIPEI_TZ  # noqa: E402
 
 DEFAULT_INPUT_PATH = paths.feature("qff_tsm", "zscore_1m")
@@ -100,6 +101,8 @@ TIME_STOP = "time_stop"
 DRIFT_BAIL = "drift_bail"
 FROZEN_MEAN_EXIT = "frozen_mean_exit"
 
+TSM_FEE_MODELS = ("bps", "ibkr")
+
 DAY_START_MINUTE = 8 * 60 + 45
 DAY_END_MINUTE = 13 * 60 + 45
 NIGHT_START_MINUTE = 17 * 60 + 25
@@ -128,6 +131,17 @@ class BacktestParams:
     qff_lots: int = 0  # > 0 = fixed lot count per entry; overrides leg_notional_twd
     qff_fee_bps: float = 0.0  # > 0 = bps of contract notional; replaces the flat rate
     executable_displacement: float = 0.0  # half the round-trip book width, spread units
+    # 'bps' charges tsm_fee_bps of leg notional per side. 'ibkr' charges what
+    # IBKR actually bills -- per ADR, with a per-order minimum and a cap, plus
+    # regulatory fees on sells only. Which one is conservative depends on the
+    # ADR price: they cross near $23.2, and below it the bps model is the
+    # cheaper of the two. See lib/ibkr_fees.py.
+    tsm_fee_model: str = "bps"
+    tsm_share_ratio: float = 5.0  # underlying shares per ADR; 'ibkr' bills per ADR
+    # The futures price executable_displacement was MEASURED at. Left 0 the
+    # displacement stays a constant, which is what every earlier run used.
+    # Set, it becomes displacement * ref / price -- see displacement_at().
+    displacement_ref_price: float = 0.0
 
 
 @dataclass
@@ -283,6 +297,26 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--tsm-fee-model",
+        choices=list(TSM_FEE_MODELS),
+        default="bps",
+        help=(
+            "How to charge the US leg. 'bps' takes --tsm-fee-bps of leg "
+            "notional per side. 'ibkr' charges what IBKR bills -- per ADR, "
+            "with a per-order minimum and a cap, plus SEC and FINRA fees on "
+            "sells only -- and needs a usdttwd_close column on the input."
+        ),
+    )
+    parser.add_argument(
+        "--tsm-share-ratio",
+        type=float,
+        default=5.0,
+        help=(
+            "Underlying shares per ADR, used by --tsm-fee-model ibkr to turn "
+            "the engine's share count into the ADR count IBKR bills."
+        ),
+    )
+    parser.add_argument(
         "--qff-fee-per-contract-twd",
         type=float,
         default=DEFAULT_QFF_FEE_PER_CONTRACT_TWD,
@@ -317,6 +351,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
             "charged per side as crossing cost. 0 (default) keeps mid pricing. "
             "Measured 0.2317 for CCF/UMC from 2,618 live minute bars (46.3 bps "
             "round trip); an earlier tick-width estimate gave 0.2151."
+        ),
+    )
+    parser.add_argument(
+        "--displacement-ref-price",
+        type=float,
+        default=0.0,
+        help=(
+            "Futures price --executable-displacement was measured at. Set it "
+            "and the displacement scales as ref/price, because a tick is fixed "
+            "in TWD while a spread unit is not. 0 keeps it constant."
         ),
     )
     parser.add_argument(
@@ -371,6 +415,7 @@ def add_entry_open_prices(
     qff_ohlcv_path: Path,
     tsm_ohlcv_path: Path,
     usdttwd_ohlcv_path: Path,
+    share_ratio: float = ADR_SHARE_RATIO,
 ) -> pd.DataFrame:
     output = frame.copy()
     full_index = pd.DatetimeIndex(output["timestamp"])
@@ -397,8 +442,11 @@ def add_entry_open_prices(
     output["qff_entry_open_was_filled"] = qff_open.isna().to_numpy()
     output["tsm_open"] = tsm_open.to_numpy()
     output["usdttwd_open"] = usdttwd_open.to_numpy()
+    # The same ratio the fee model bills at. Hardcoding 5 here while
+    # params.tsm_share_ratio drove the commission meant a pair with any other
+    # ADR ratio would price its fills and its fees off different instruments.
     output["tsm_twd_fair_open"] = (
-        output["tsm_open"] * output["usdttwd_open"] / 5
+        output["tsm_open"] * output["usdttwd_open"] / share_ratio
     )
     return output
 
@@ -661,20 +709,57 @@ def should_exit(
     raise ValueError(f"Unknown direction: {direction}")
 
 
+def displacement_at(price, params: BacktestParams, base=None):
+    """Half the book width at this price, in spread units. Scalar or array.
+
+    A TICK IS FIXED IN CURRENCY AND A SPREAD UNIT IS NOT. TAIFEX quotes CCF in
+    half-dollar steps whatever the share costs, so the narrowest a book can ever
+    be -- one tick -- is a bigger slice of notional on a cheap share than on an
+    expensive one. Over 2026-01 to 2026-08 CCF ran 59 to 145 TWD, so half a tick
+    moved between 0.17 and 0.42 spread units: the floor alone more than doubled
+    while a single measured constant sat still across all of it.
+
+    Both legs scale the same way. The US tick is fixed in cents and the two legs
+    price the same company, so their prices move together and each leg's
+    half-width has the same 1/price shape. That is why one reference price
+    rescales the whole measured displacement rather than only its futures half,
+    and why nothing here needs the width decomposed leg by leg.
+
+    displacement_ref_price is the price the measurement was taken at, so there
+    this returns exactly executable_displacement and a rescaled run reproduces
+    the constant-displacement one. Away from it the correction is linear in
+    1/price. Leaving ref at 0 keeps the constant.
+
+    THIS IS A FLOOR, NOT A FORECAST. It models only the part of the width forced
+    by arithmetic, not a book that widens because trading got thin. CCF's night
+    session traded 2 lots a minute in March against 11 in June, and a thin book
+    is wider than its floor by more than a busy one. What this returns for the
+    thin months is the least those trades could have paid.
+    """
+    if base is None:
+        base = params.executable_displacement
+    if params.displacement_ref_price <= 0.0:
+        return base
+    return base * params.displacement_ref_price / price
+
+
 def executable_zscores(
     zscore: np.ndarray,
     spread_std: np.ndarray,
     zvalid: np.ndarray,
-    displacement: float,
+    displacement,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Directional z series. displacement is in spread units, one side.
+
+    ``displacement`` is a scalar or a per-bar array; np.divide broadcasts both,
+    so a price-scaled displacement needs no separate path here.
 
     The caller is responsible for proving spread_std is a real rolling std --
     see require_spread_std_for_displacement. A synthesised all-ones std would
     sail through the check below while silently reinterpreting displacement
     from spread units into raw z units.
     """
-    if displacement <= 0.0:
+    if np.all(np.asarray(displacement) <= 0.0):
         return zscore, zscore
     usable = zvalid & np.isfinite(spread_std) & (spread_std > 0.0)
     if not np.array_equal(usable, zvalid):
@@ -689,13 +774,22 @@ def executable_zscores(
 
 
 def require_spread_std_for_displacement(
-    std_col: str | None, params: BacktestParams
+    std_col: str | None, params: BacktestParams, displaced: bool | None = None
 ) -> None:
     """displacement is quoted in spread units and converted to z by dividing by
     the rolling spread std, so an absent std column is not a graceful fallback:
     np.ones would turn the knob into a flat z offset, off by whatever the real
-    std happens to be. Fail loudly instead."""
-    if params.executable_displacement > 0.0 and std_col is None:
+    std happens to be. Fail loudly instead.
+
+    `displaced` says whether the run is actually displaced, which the scalar
+    alone no longer answers: a per-bar `executable_displacement` column
+    overrides it, so a frame carrying one walked past this guard whenever the
+    scalar was left at 0. Pass what the run resolved; omit it only where no
+    column can reach.
+    """
+    if displaced is None:
+        displaced = params.executable_displacement > 0.0
+    if displaced and std_col is None:
         raise RuntimeError(
             "executable_displacement needs a rolling spread std column "
             "(spread_std*) to convert spread units into z units; the input "
@@ -918,6 +1012,13 @@ def validate_params(params: BacktestParams) -> None:
         raise RuntimeError("persistence_k must be at least 1")
     if params.tsm_fee_bps < 0:
         raise RuntimeError("tsm_fee_bps must be non-negative")
+    if params.tsm_fee_model not in TSM_FEE_MODELS:
+        raise RuntimeError(
+            f"tsm_fee_model must be one of {sorted(TSM_FEE_MODELS)}, "
+            f"got {params.tsm_fee_model!r}"
+        )
+    if params.tsm_share_ratio <= 0:
+        raise RuntimeError("tsm_share_ratio must be positive")
     if params.qff_fee_per_contract_twd < 0:
         raise RuntimeError("qff_fee_per_contract_twd must be non-negative")
     if params.qff_fee_bps < 0:
@@ -933,6 +1034,17 @@ def validate_params(params: BacktestParams) -> None:
         raise RuntimeError("qff_contract_multiplier must be positive")
     if params.executable_displacement < 0:
         raise RuntimeError("executable_displacement must be non-negative")
+    if params.displacement_ref_price < 0:
+        raise RuntimeError("displacement_ref_price must be non-negative")
+
+
+def us_side(tsm_units: float) -> str:
+    """Which way the US leg is traded for a position of this sign.
+
+    Positive units mean the strategy is long the ADR, which it establishes by
+    buying. Closing passes the negated units, so one helper covers both ends.
+    """
+    return ibkr_fees.BUY if tsm_units > 0 else ibkr_fees.SELL
 
 
 def fill_costs(
@@ -942,8 +1054,34 @@ def fill_costs(
     qff_contracts: int,
     qff_price: float,
     params: BacktestParams,
+    tsm_side: str | None = None,
+    usdtwd: float = float("nan"),
+    displacement: float | None = None,
 ) -> dict[str, float]:
-    tsm_fee_twd = abs(tsm_units) * tsm_price * params.tsm_fee_bps / 10000.0
+    """Every cost charged on one fill of both legs.
+
+    ``tsm_side`` and ``usdtwd`` are read only by the 'ibkr' US-leg fee model,
+    which needs to know which way the order went (regulatory fees are levied on
+    the seller alone) and what a USD commission is worth in TWD. The 'bps' model
+    needs neither, so both stay optional and every existing caller keeps
+    working; the ibkr path raises rather than guessing if they are absent.
+    """
+    if params.tsm_fee_model == "ibkr":
+        if tsm_side is None:
+            raise RuntimeError(
+                "tsm_fee_model='ibkr' needs tsm_side: IBKR charges SEC and "
+                "FINRA fees on sells only, so a side-blind model would "
+                "understate every sale and overstate every purchase"
+            )
+        tsm_fee_twd = ibkr_fees.us_leg_fee_twd(
+            shares=tsm_units,
+            price_twd_per_share=tsm_price,
+            side=tsm_side,
+            usdtwd=usdtwd,
+            share_ratio=params.tsm_share_ratio,
+        )
+    else:
+        tsm_fee_twd = abs(tsm_units) * tsm_price * params.tsm_fee_bps / 10000.0
     if params.qff_fee_bps > 0.0:
         qff_fee_twd = (
             abs(qff_contracts)
@@ -961,9 +1099,11 @@ def fill_costs(
     # The engine fills at mid, so crossing the book has to be charged. One
     # displacement per side; the spread is a percentage-scaled quantity, hence
     # the /100 rather than /10000.
-    crossing_cost_twd = (
-        abs(tsm_units) * tsm_price * params.executable_displacement / 100.0
-    )
+    # Scaled by the FUTURES price: that is the leg whose tick dominates the
+    # width, and the leg displacement_ref_price is quoted against.
+    if displacement is None:
+        displacement = displacement_at(qff_price, params)
+    crossing_cost_twd = abs(tsm_units) * tsm_price * displacement / 100.0
     total_fee_twd = tsm_fee_twd + qff_fee_twd + qff_tax_twd + crossing_cost_twd
     return {
         "tsm_fee_twd": tsm_fee_twd,
@@ -984,10 +1124,13 @@ SHARED_PARAM_FIELDS = (
     "qff_lots",
     "qff_contract_multiplier",
     "tsm_fee_bps",
+    "tsm_fee_model",
+    "tsm_share_ratio",
     "qff_fee_per_contract_twd",
     "qff_fee_bps",
     "qff_tax_rate",
     "executable_displacement",
+    "displacement_ref_price",
 )
 
 
@@ -1000,7 +1143,11 @@ def require_shared_param_fields(params: Any) -> None:
         )
 
 
-def entry_cost_fields(entry_costs: dict[str, float]) -> dict[str, float]:
+def entry_cost_fields(
+    entry_costs: dict[str, float],
+    entry_usdtwd: float = float("nan"),
+    entry_displacement: float | None = None,
+) -> dict[str, float]:
     """The per-entry cost keys close_open_trade will look for on an open_trade.
 
     Both engines build their open_trade through this, so a new cost component
@@ -1012,6 +1159,13 @@ def entry_cost_fields(entry_costs: dict[str, float]) -> dict[str, float]:
         "entry_qff_tax_twd": entry_costs["qff_tax_twd"],
         "entry_crossing_cost_twd": entry_costs["crossing_cost_twd"],
         "entry_fee_twd": entry_costs["total_fee_twd"],
+        # The rate this fill was converted at, and the displacement it was
+        # charged, so validate_backtest reproduces both rather than re-deriving
+        # inputs it has lost. Without the displacement the audit recomputes a
+        # per-bar cost from the scalar parameter and fails on every run that
+        # varies it.
+        "entry_usdtwd": entry_usdtwd,
+        "entry_displacement": entry_displacement,
     }
 
 
@@ -1038,6 +1192,42 @@ def run_backtest(frame: pd.DataFrame, params: BacktestParams) -> BacktestResult:
         if "qff_entry_open_was_filled" in data.columns
         else np.zeros(n_rows, dtype=bool)
     )
+    # Whether the two arrays above are genuinely opens. Without the columns they
+    # ARE the close arrays, and stamping the trade "open" anyway described a
+    # fill the run never made -- every report-path trade filled one bar's worth
+    # of drift later than its own metadata claimed. The label now follows the
+    # data, so a frame without opens is reported for what it is.
+    has_entry_open = (
+        "qff_entry_open_filled" in data.columns
+        and "tsm_twd_fair_open" in data.columns
+    )
+    signal_fill_price_type = "open" if has_entry_open else "close"
+    # Read only by the 'ibkr' US-leg fee model, and paired with the price array
+    # it belongs to: a fill priced at the open has to be converted at the open
+    # rate. Absent columns leave NaN, which the ibkr path rejects loudly rather
+    # than pricing a USD commission at a made-up rate.
+    usdtwd = (
+        data["usdttwd_close"].to_numpy(dtype=float)
+        if "usdttwd_close" in data.columns
+        else np.full(n_rows, np.nan)
+    )
+    usdtwd_entry = (
+        data["usdttwd_open"].to_numpy(dtype=float)
+        if "usdttwd_open" in data.columns
+        else usdtwd
+    )
+    # A per-bar base displacement, when the caller supplies one. The engine has
+    # no business knowing that TAIFEX cut QFF's tick from 5 TWD to 1 on
+    # 2026-07-05; the caller owns that schedule and hands the result down this
+    # column, so one run can span a rule change that a scalar cannot. Absent
+    # the column this is params.executable_displacement everywhere, which is
+    # what every earlier run had.
+    base_disp = (
+        data["executable_displacement"].to_numpy(dtype=float)
+        if "executable_displacement" in data.columns
+        else np.full(n_rows, params.executable_displacement)
+    )
+    bar_disp = displacement_at(qff, params, base_disp)
     zscore = data["spread_zscore"].to_numpy(dtype=float)
     zvalid = data["zscore_valid"].to_numpy(dtype=bool)
     # spread level / rolling stats for the frozen-mean and drift-bail exits.
@@ -1078,8 +1268,12 @@ def run_backtest(frame: pd.DataFrame, params: BacktestParams) -> BacktestResult:
     weekend_session_close_only = data["weekend_session_close_only"].to_numpy(dtype=bool)
     friday_session_end = data["friday_session_end_force_close"].to_numpy(dtype=bool)
 
-    require_spread_std_for_displacement(std_col, params)
-    if params.executable_displacement > 0.0 and params.frozen_mean_exit:
+    # The run is displaced if ANY bar is, whether that came from the scalar or
+    # from the per-bar column. Keying these three guards on the scalar alone let
+    # a column-bearing frame with the knob at 0 run displaced past all of them.
+    is_displaced = bool(np.any(bar_disp > 0.0))
+    require_spread_std_for_displacement(std_col, params, is_displaced)
+    if is_displaced and params.frozen_mean_exit:
         raise RuntimeError(
             "executable_displacement and frozen_mean_exit have not been tested "
             "together; the frozen-mean rule compares spread levels directly and "
@@ -1089,15 +1283,13 @@ def run_backtest(frame: pd.DataFrame, params: BacktestParams) -> BacktestResult:
     # are raw spread comparisons with no displaced counterpart, and because a
     # displaced entry only fires at a larger mid dislocation, dev_ref comes out
     # inflated and the bail triggers later than it was calibrated to.
-    if params.executable_displacement > 0.0 and params.drift_bail_c > 0.0:
+    if is_displaced and params.drift_bail_c > 0.0:
         raise RuntimeError(
             "executable_displacement and drift_bail_c have not been reconciled; "
             "the drift-bail rule compares raw spread levels and means, so it "
             "would need its own displaced reference"
         )
-    z_short, z_long = executable_zscores(
-        zscore, spread_std, zvalid, params.executable_displacement
-    )
+    z_short, z_long = executable_zscores(zscore, spread_std, zvalid, bar_disp)
 
     entry_observation = entry_allowed & zvalid
     close_observation = close_allowed & zvalid
@@ -1172,6 +1364,9 @@ def run_backtest(frame: pd.DataFrame, params: BacktestParams) -> BacktestResult:
                     qff_contracts=qff_contracts,
                     qff_price=entry_qff,
                     params=params,
+                    tsm_side=us_side(tsm_units),
+                    usdtwd=usdtwd_entry[index],
+                    displacement=bar_disp[index],
                 )
                 realized_pnl -= entry_costs["total_fee_twd"]
                 realized_fee_twd += entry_costs["total_fee_twd"]
@@ -1181,7 +1376,7 @@ def run_backtest(frame: pd.DataFrame, params: BacktestParams) -> BacktestResult:
                     "entry_signal_zscore": candidate_zscore,
                     "entry_idx": index,
                     "entry_time": timestamps[index],
-                    "entry_fill_price_type": "open",
+                    "entry_fill_price_type": signal_fill_price_type,
                     "entry_delay_minutes": minutes_between(
                         timestamps[candidate_idx], timestamps[index]
                     ),
@@ -1199,7 +1394,9 @@ def run_backtest(frame: pd.DataFrame, params: BacktestParams) -> BacktestResult:
                     "leg_notional_twd": params.leg_notional_twd,
                     "actual_leg_notional_twd": actual_leg_notional_twd,
                     "qff_contract_multiplier": params.qff_contract_multiplier,
-                    **entry_cost_fields(entry_costs),
+                    **entry_cost_fields(
+                        entry_costs, usdtwd_entry[index], bar_disp[index]
+                    ),
                 }
                 state = position_direction
                 candidate_direction = None
@@ -1217,13 +1414,15 @@ def run_backtest(frame: pd.DataFrame, params: BacktestParams) -> BacktestResult:
                 exit_idx=index,
                 exit_time=timestamps[index],
                 exit_tsm=tsm_entry[index],
+                exit_usdtwd=usdtwd_entry[index],
+                exit_displacement=bar_disp[index],
                 exit_qff=qff_entry[index],
                 exit_zscore=zscore[index],
                 exit_signal_idx=exit_signal_idx,
                 exit_signal_time=timestamps[exit_signal_idx],
                 exit_signal_zscore=zscore[exit_signal_idx],
                 exit_reason=exit_reason_pending,
-                exit_fill_price_type="open",
+                exit_fill_price_type=signal_fill_price_type,
                 params=params,
             )
             realized_fee_twd += trades[-1]["exit_fee_twd"]
@@ -1254,6 +1453,8 @@ def run_backtest(frame: pd.DataFrame, params: BacktestParams) -> BacktestResult:
                 exit_idx=index,
                 exit_time=timestamps[index],
                 exit_tsm=tsm[index],
+                exit_usdtwd=usdtwd[index],
+                exit_displacement=bar_disp[index],
                 exit_qff=qff[index],
                 exit_zscore=zscore[index],
                 exit_signal_idx=index,
@@ -1409,6 +1610,8 @@ def run_backtest(frame: pd.DataFrame, params: BacktestParams) -> BacktestResult:
             exit_idx=last_idx,
             exit_time=timestamps[last_idx],
             exit_tsm=tsm[last_idx],
+            exit_usdtwd=usdtwd[last_idx],
+            exit_displacement=bar_disp[last_idx],
             exit_qff=qff[last_idx],
             exit_zscore=zscore[last_idx],
             exit_signal_idx=exit_signal_idx if exit_signal_idx != -1 else last_idx,
@@ -1501,6 +1704,8 @@ def close_open_trade(
     exit_reason: str,
     exit_fill_price_type: str,
     params: BacktestParams,
+    exit_usdtwd: float = float("nan"),
+    exit_displacement: float | None = None,
 ) -> float:
     tsm_pnl = open_trade["tsm_units"] * (exit_tsm - open_trade["entry_tsm_twd_fair"])
     qff_pnl = open_trade["qff_units"] * (exit_qff - open_trade["entry_qff_close"])
@@ -1511,6 +1716,11 @@ def close_open_trade(
         qff_contracts=int(open_trade["qff_contracts"]),
         qff_price=exit_qff,
         params=params,
+        # Closing reverses the leg: a long US position is SOLD out, and that is
+        # the side the SEC and FINRA fees attach to.
+        tsm_side=us_side(-open_trade["tsm_units"]),
+        usdtwd=exit_usdtwd,
+        displacement=exit_displacement,
     )
     tsm_fee_twd = open_trade["entry_tsm_fee_twd"] + exit_costs["tsm_fee_twd"]
     qff_fee_twd = open_trade["entry_qff_fee_twd"] + exit_costs["qff_fee_twd"]
@@ -1545,6 +1755,10 @@ def close_open_trade(
         "exit_qff_tax_twd": exit_costs["qff_tax_twd"],
         "exit_crossing_cost_twd": exit_costs["crossing_cost_twd"],
         "exit_fee_twd": exit_costs["total_fee_twd"],
+        "entry_usdtwd": open_trade.get("entry_usdtwd", float("nan")),
+        "exit_usdtwd": exit_usdtwd,
+        "entry_displacement": open_trade.get("entry_displacement", float("nan")),
+        "exit_displacement": exit_displacement,
         "tsm_fee_twd": tsm_fee_twd,
         "qff_fee_twd": qff_fee_twd,
         "qff_tax_twd": qff_tax_twd,
@@ -1565,6 +1779,14 @@ def build_summary(
     trades: pd.DataFrame,
     params: BacktestParams,
 ) -> dict[str, Any]:
+    # Derived from the same frame run_backtest priced off, so the summary can
+    # never claim open fills for a run that had no open columns to fill at.
+    signal_fill_price_type = (
+        "open"
+        if "qff_entry_open_filled" in data.columns
+        and "tsm_twd_fair_open" in data.columns
+        else "close"
+    )
     total_pnl = float(equity["equity"].iloc[-1] - params.initial_capital_twd)
     trade_count = int(len(trades))
     wins = int((trades["total_pnl"] > 0).sum()) if trade_count else 0
@@ -1606,14 +1828,33 @@ def build_summary(
             "initial_capital_twd": params.initial_capital_twd,
             "max_entry_delay_minutes": params.max_entry_delay_minutes,
             "tsm_fee_bps": params.tsm_fee_bps,
+            "tsm_fee_model": params.tsm_fee_model,
+            "tsm_share_ratio": params.tsm_share_ratio,
             "qff_fee_mode": "bps" if params.qff_fee_bps > 0.0 else "flat",
             "qff_fee_per_contract_twd": params.qff_fee_per_contract_twd,
             "qff_fee_bps": params.qff_fee_bps,
             "qff_tax_rate": params.qff_tax_rate,
             "qff_contract_multiplier": params.qff_contract_multiplier,
             "executable_displacement": params.executable_displacement,
-            "entry_fill_price": "next_entry_allowed_open",
-            "exit_fill_price": "signal_exit_next_close_allowed_open",
+            # What the run actually used. The scalar above is only the default:
+            # a per-bar column overrides it, and a summary that reported the
+            # scalar described a cost model the run had not applied.
+            "executable_displacement_source": (
+                "per_bar_column"
+                if "executable_displacement" in data.columns
+                else "scalar"
+            ),
+            "executable_displacement_range": (
+                [
+                    float(data["executable_displacement"].min()),
+                    float(data["executable_displacement"].max()),
+                ]
+                if "executable_displacement" in data.columns
+                else [params.executable_displacement, params.executable_displacement]
+            ),
+            "displacement_ref_price": params.displacement_ref_price,
+            "entry_fill_price": f"next_entry_allowed_{signal_fill_price_type}",
+            "exit_fill_price": f"signal_exit_next_close_allowed_{signal_fill_price_type}",
             "forced_exit_fill_price": "close",
         },
         "rows": int(len(equity)),
@@ -1727,9 +1968,44 @@ def validate_backtest(
         if audit_std_col is not None
         else np.ones(len(data))
     )
-    require_spread_std_for_displacement(audit_std_col, params)
+    audit_qff = data["qff_close_filled"].to_numpy(dtype=float)
+    audit_base = (
+        data["executable_displacement"].to_numpy(dtype=float)
+        if "executable_displacement" in data.columns
+        else np.full(len(data), params.executable_displacement)
+    )
+    # The basis signal fills actually used, derived from the frame exactly as
+    # run_backtest derives it. Asserting a literal "open" here would fail every
+    # run on a frame with no open columns -- a frame the engine accepts and
+    # prices at the close, and now says so.
+    audit_signal_fill_type = (
+        "open"
+        if "qff_entry_open_filled" in data.columns
+        and "tsm_twd_fair_open" in data.columns
+        else "close"
+    )
+    audit_bar_disp = displacement_at(audit_qff, params, audit_base)
+    require_spread_std_for_displacement(
+        audit_std_col, params, bool(np.any(audit_bar_disp > 0.0))
+    )
     audit_z_short, audit_z_long = executable_zscores(
-        zscore, audit_std, zvalid, params.executable_displacement
+        zscore, audit_std, zvalid, audit_bar_disp
+    )
+    # Independently rebuilt FX, paired with the price array each fill used: an
+    # open-priced fill converts at the open rate. Feeding the trade's own
+    # recorded rate and displacement back into fill_costs only checked the fee
+    # formula against itself, so a run charging the wrong BAR's displacement or
+    # rate reproduced its own error and passed. These arrays are what the audit
+    # compares the recorded values against.
+    audit_usdtwd = (
+        data["usdttwd_close"].to_numpy(dtype=float)
+        if "usdttwd_close" in data.columns
+        else np.full(len(data), np.nan)
+    )
+    audit_usdtwd_entry = (
+        data["usdttwd_open"].to_numpy(dtype=float)
+        if "usdttwd_open" in data.columns
+        else audit_usdtwd
     )
     entry_obs = entry_allowed & zvalid
     next_entry_fill = compute_next_indices(entry_allowed)
@@ -1819,8 +2095,11 @@ def validate_backtest(
                 raise RuntimeError(
                     "z-score exit should not occur when frozen-mean exit is on"
                 )
-            if trade["exit_fill_price_type"] != "open":
-                raise RuntimeError("Z-score exit should fill at the next bar open")
+            if trade["exit_fill_price_type"] != audit_signal_fill_type:
+                raise RuntimeError(
+                    "Z-score exit should fill at the next bar "
+                    f"{audit_signal_fill_type}"
+                )
         elif exit_reason == FROZEN_MEAN_EXIT:
             if next_close_fill[exit_signal_idx] != exit_idx:
                 raise RuntimeError("Frozen exit fill is not the next close-allowed minute")
@@ -1832,8 +2111,10 @@ def validate_backtest(
                 params.exit_z,
             ):
                 raise RuntimeError("Frozen exit fired without meeting its threshold")
-            if trade["exit_fill_price_type"] != "open":
-                raise RuntimeError("Frozen exit should fill at the next bar open")
+            if trade["exit_fill_price_type"] != audit_signal_fill_type:
+                raise RuntimeError(
+                    f"Frozen exit should fill at the next bar {audit_signal_fill_type}"
+                )
         elif exit_reason == DRIFT_BAIL:
             if next_close_fill[exit_signal_idx] != exit_idx:
                 raise RuntimeError("Drift bail fill is not the next close-allowed minute")
@@ -1848,8 +2129,10 @@ def validate_backtest(
                 params.drift_bail_c,
             ):
                 raise RuntimeError("Drift bail fired without meeting its threshold")
-            if trade["exit_fill_price_type"] != "open":
-                raise RuntimeError("Drift bail should fill at the next bar open")
+            if trade["exit_fill_price_type"] != audit_signal_fill_type:
+                raise RuntimeError(
+                    f"Drift bail should fill at the next bar {audit_signal_fill_type}"
+                )
         elif exit_reason == FRIDAY_SESSION_END:
             if exit_signal_idx != exit_idx:
                 raise RuntimeError("Friday forced exit should use the exit bar as signal")
@@ -1864,8 +2147,11 @@ def validate_backtest(
                 raise RuntimeError("Time stop exit is not at a close-allowed bar")
             if int(trade["holding_minutes"]) < params.max_holding_minutes:
                 raise RuntimeError("Time stop fired before max_holding_minutes")
-            if trade["exit_fill_price_type"] != "open":
-                raise RuntimeError("Time stop exit should fill at the next bar open")
+            if trade["exit_fill_price_type"] != audit_signal_fill_type:
+                raise RuntimeError(
+                    "Time stop exit should fill at the next bar "
+                    f"{audit_signal_fill_type}"
+                )
         elif exit_reason != "end_of_data":
             raise RuntimeError(f"Unknown exit reason: {exit_reason}")
 
@@ -1906,12 +2192,42 @@ def validate_backtest(
         expected_qff_pnl = trade["qff_units"] * (
             trade["exit_qff_close"] - trade["entry_qff_close"]
         )
+        # Re-derived from the frame at the trade's own fill bars, not read back
+        # off the trade. A wrong-bar displacement or FX rate now fails here
+        # instead of being reproduced and certified.
+        audit_entry_disp = float(audit_bar_disp[entry_idx])
+        audit_entry_usdtwd = float(audit_usdtwd_entry[entry_idx])
+        exit_at_open = str(trade.get("exit_fill_price_type", "close")) == "open"
+        audit_exit_disp = float(audit_bar_disp[exit_idx])
+        audit_exit_usdtwd = float(
+            (audit_usdtwd_entry if exit_at_open else audit_usdtwd)[exit_idx]
+        )
+        for label, recorded, expected in (
+            ("entry displacement", trade.get("entry_displacement"), audit_entry_disp),
+            ("exit displacement", trade.get("exit_displacement"), audit_exit_disp),
+            ("entry usdtwd", trade.get("entry_usdtwd"), audit_entry_usdtwd),
+            ("exit usdtwd", trade.get("exit_usdtwd"), audit_exit_usdtwd),
+        ):
+            if recorded is None or (
+                isinstance(recorded, float) and np.isnan(recorded)
+            ):
+                continue
+            if np.isnan(expected):
+                continue
+            if abs(float(recorded) - expected) > 1e-9:
+                raise RuntimeError(
+                    f"Recorded {label} {float(recorded)!r} does not match the "
+                    f"frame's value {expected!r} at the fill bar"
+                )
         expected_entry_costs = fill_costs(
             tsm_units=trade["tsm_units"],
             tsm_price=trade["entry_tsm_twd_fair"],
             qff_contracts=qff_contracts,
             qff_price=trade["entry_qff_close"],
             params=params,
+            tsm_side=us_side(trade["tsm_units"]),
+            usdtwd=audit_entry_usdtwd,
+            displacement=audit_entry_disp,
         )
         expected_exit_costs = fill_costs(
             tsm_units=trade["tsm_units"],
@@ -1919,6 +2235,9 @@ def validate_backtest(
             qff_contracts=qff_contracts,
             qff_price=trade["exit_qff_close"],
             params=params,
+            tsm_side=us_side(-trade["tsm_units"]),
+            usdtwd=audit_exit_usdtwd,
+            displacement=audit_exit_disp,
         )
         expected_gross_pnl = expected_tsm_pnl + expected_qff_pnl
         expected_total_fee = (
@@ -2005,6 +2324,31 @@ def run_self_tests() -> None:
         raise RuntimeError("Self-test failed: exit TSM price should use open")
     if abs(open_fill_trade["exit_qff_open_filled"] - 70.0) > 1e-7:
         raise RuntimeError("Self-test failed: exit QFF price should use open")
+
+    # The same frame WITHOUT open columns. The engine may fall back to the fill
+    # bar's close -- what it may not do is call that an open fill, which is
+    # what every report-path run claimed while pricing at the close.
+    close_fill = make_synthetic_frame(
+        pd.date_range("2026-06-08 08:45", periods=4, freq="min", tz=TAIPEI_TZ),
+        zscores=[2.1, 1.0, -0.1, -0.2],
+        tsm_start=100.0,
+        qff_start=100.0,
+    )
+    close_fill_result = run_backtest(close_fill, params)
+    if not len(close_fill_result.trades):
+        raise RuntimeError("Self-test failed: close-fill case should create a trade")
+    close_fill_trade = close_fill_result.trades.iloc[0]
+    if close_fill_trade["entry_fill_price_type"] != "close":
+        raise RuntimeError(
+            "Self-test failed: a frame with no open columns fills at the close "
+            "and must be labelled close"
+        )
+    if close_fill_result.summary["parameters"]["entry_fill_price"] != (
+        "next_entry_allowed_close"
+    ):
+        raise RuntimeError(
+            "Self-test failed: summary should report the close fill basis"
+        )
 
     delay_times = pd.DatetimeIndex(
         [
