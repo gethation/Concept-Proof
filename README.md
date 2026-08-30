@@ -10,7 +10,7 @@ Two active pairs:
 | Pair | Taiwan leg | US leg | FX |
 |---|---|---|---|
 | **CCF / UMC** | TAIFEX CCF (UMC stock futures, 2,000 shares/contract) | NYSE:UMC ADR (1 ADR = 5 shares) | FX_IDC USDTWD |
-| **QFF / TSM** | TAIFEX QFF (TSMC stock futures, 100 shares/contract) | Binance TSMUSDT perpetual | BitoPro USDT/TWD |
+| **QFF / TSM** | TAIFEX QFF (TSMC stock futures, 100 shares/contract) | OKX TSM-USDT perpetual | BitoPro USDT/TWD |
 
 All timestamps are Taipei time (`+08:00`).
 
@@ -44,21 +44,74 @@ printed on the bid or the ask. The reports screen at a median edge of ≥ 2 tick
 
 ## Backtest results
 
-Best configuration for each pair, on 2M TWD capital with 1M notional per leg.
-**These figures are recomputed by `make_reports.py` on every run; below is the
-result on data through 2026-08-15.**
+Both columns are `make_reports.py` on data through 2026-08-26, ranked by
+**linearly annualised return**.
+
+**Neither headline passes the quality screen.** Ranking by return and screening
+for verifiability are different questions, and on this data they disagree: the
+highest-annualised cell in each grid takes more trades, each one thinner, and a
+large share of them earn less than one tick — which is to say their profit is
+inside the noise of whether a fill printed on the bid or the ask. The reports
+label every cell with its screen verdict so the two can be read apart.
 
 | | CCF / UMC | QFF / TSM |
 |---|---|---|
-| Period | 2026-06-09 → 08-15 (46 sessions) | 2026-07-06 → 08-15 (29 sessions) |
-| Configuration | w2500 / entry 1.0 / exit 0.25 | w1560 / entry 2.0 / exit 0 |
-| Trades | 32 | 21 |
-| Total return | **+88.0%** annual | **27.2%** annual |
-| Sharpe | 8.75 | 3.63 |
-| Max drawdown | −1.97% | −1.59% |
-| Return / drawdown | 8.1x | 1.9x |
-| Median edge per contract | 2.21 ticks (6% inside one tick) | 8.08 ticks (14% inside one tick) |
-| Round-trip cost | 54.9 bps (78.9% crossing) | 32.8 bps (46.0% crossing) |
+| Period | 2026-01-06 → 08-26 (149 sessions) | 2026-04-01 → 08-26 (98 sessions) |
+| Configuration | w1560 / entry 1.0 / exit 0.5 | w2500 / entry 1.5 / exit 0 |
+| Displacement | 0.2317 (measured), 1/price scaled from 121.50 | 0.1589 pre-2026-07-05, 0.0755 after |
+| US-leg fee | IBKR per-ADR (5.39 bps realised median) | 5.0 bps flat (measured on Binance, leg is OKX) |
+| Trades | 73 | 70 |
+| Total return | 27.89% over 231 days | 11.99% over 148 days |
+| Linear annualised | **44.0%** | **29.6%** |
+| Sharpe | 4.08 | 3.55 |
+| Max drawdown | −3.47% | −3.22% |
+| Median edge per contract | 1.91 ticks | 2.39 ticks |
+| Inside one tick | 34.2% | 30.0% |
+| Round-trip cost | 71.4 bps (77.9% crossing) | 46.1 bps (60.6% crossing) |
+| **Passes screen** | **no** | **no** |
+| Cells passing screen | 7 of 140 | **0 of 140** |
+
+The most conservative alternative — highest annualised return *among* cells that
+pass all four thresholds — is **w2500 / entry 2.0 / exit 0** for CCF/UMC: 26.9%
+annualised, 28 trades, 14.3% inside one tick. QFF/TSM has no such cell at any
+setting; raising entry_z far enough to clear the sub-tick share collapses its
+trade count below the 15-trade minimum, which is the finding rather than a
+tuning problem.
+
+Linear annualisation multiplies a 231-day (CCF/UMC) or 148-day (QFF/TSM) sample
+by 1.6x and 2.5x respectively. It is an extrapolation, not a measurement; the
+raw period return is the number that actually happened.
+
+Fills are priced at the **open of the next tradable bar**. Both reports
+previously filled at that bar's *close* while their own metadata and prose said
+open — the spread files carry no open columns, and the engine fell back to the
+close without saying so. On the configurations above the correction is worth
++0.25 pp (CCF/UMC) and +1.03 pp (QFF/TSM) of total return.
+
+Rolling windows are also no longer allowed to span a hole in the data. QFF's 1m
+series is missing 2026-07-01..07-06 outright, and CCF/UMC spans Lunar New Year
+and Qingming; a window reaching across any of them was splicing two regimes into
+one mean. Withholding those windows costs CCF/UMC 3 trades and 1.9 pp.
+
+**Quote the displacement with the result, or the result is not reproducible.**
+Earlier versions of this table reported far higher annualised returns (88.0%,
+then 68.2%) on far shorter samples. None of that difference was the market: it
+was the displacement constant changing (0.2151 inferred, then 0.2317 measured),
+the sample lengthening from 52 sessions to 149, and the fill and gap corrections
+above. A larger displacement moves every z threshold by
+`displacement / spread_std` and charges more per crossing, so it changes trade
+count, cost and return together — which is why it has a row in the table rather
+than living only in the methodology. Annualising a two-month sample linearly is
+also what produced the largest of those headline numbers; the current table
+quotes the raw period return first for that reason.
+
+The US-leg fee row is there for the same reason. CCF/UMC is priced with IBKR's
+real schedule -- per ADR, minimum and cap, SEC and FINRA on sells only -- rather
+than a flat bps figure, and which of the two is more conservative depends on the
+ADR price: they cross near $23.2. Over this sample UMC ran $16.74 to $28.87 and
+the two models very nearly cancel (-1.3% on the US leg). Over August alone, with
+UMC at $19, the per-ADR model charges 12.9% more -- which matches the +13% the
+live fills actually paid. See `scripts/lib/ibkr_fees.py`.
 
 QFF/TSM covers a shorter period because **QFF's tick size dropped from 5 TWD to
 1 TWD on 2026-07-05**, cutting its crossing cost by four fifths. A single
@@ -94,9 +147,32 @@ python scripts/ingest/taifex_1m.py --product CCF
 python scripts/ingest/taifex_1m.py --product QFF
 python scripts/ingest/tv_umc.py
 python scripts/ingest/tv_ccf_umc.py
-python scripts/ingest/ccxt_ohlcv.py --feed binance_tsmusdtp
+python scripts/ingest/qff_tsm_15m.py          # OKX perp leg, the one qff_tsm reads
 python scripts/ingest/ccxt_ohlcv.py --feed bitopro_usdttwd
 ```
+
+Two more that are not part of the routine refresh:
+
+```bash
+python scripts/ingest/lux_quotes.py                    # book mid, from Project Lux
+python scripts/ingest/ibkr_umc.py --duration-weeks 52  # deeper UMC history
+```
+
+`lux_quotes.py` turns Project Lux's stored quote stream into mid-price minute
+bars under `data/bars/lux/`. It exists because every price here is a LAST TRADED
+price -- TAIFEX publishes time-and-sales with no quote columns at all -- while
+the live system scores on the book mid, and for a one-tick-wide CCF book those
+differ by exactly half a tick at random sign. Measured against 3,807 shared
+minutes, rebuilding the spread on mid cuts its deviation from what live actually
+saw by 77% (sigma 0.238 to 0.055) and lifts native-bar coverage from 64% to
+100%, because a book quotes every second even when nothing trades. **Its
+coverage starts 2026-08-07** and no source can reach back further, so it is a
+calibration series until the live store has accumulated a window plus a sample.
+
+`ibkr_umc.py` deepens the UMC leg past tvdatafeed's rolling 19 days. It refuses
+to run while a Project Lux live session is trading, because IBKR meters
+historical requests per ACCOUNT and a backfill would throttle the live run's
+market data.
 
 ### Build the spreads
 
