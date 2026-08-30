@@ -4,6 +4,7 @@ import argparse
 import sys
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -75,8 +76,46 @@ def read_spread_frame(path: Path) -> pd.DataFrame:
     return frame
 
 
+def gap_contaminated(
+    timestamps: pd.DatetimeIndex, window: int, max_gap_minutes: float
+) -> "np.ndarray":
+    """Rows whose rolling window reaches back across a hole in the data.
+
+    A rolling window counts BARS, not minutes, so it has no idea whether the
+    2,500 bars behind it are the last two days or straddle a week the data
+    simply does not contain. QFF's 1m series is missing 2026-07-01..07-06
+    outright -- five trading days no source will serve again -- and the mean and
+    std for the first `window` bars after it were computed by splicing across
+    that hole, then traded on as though they described one continuous market.
+
+    Sessions are not continuous either, so the threshold has to sit above a
+    normal close: the widest ordinary gap is Friday's night close to Monday's
+    open, about 3.2 days. Anything past four days is a hole or a market-wide
+    closure, and either way the window spanning it is not describing one
+    regime.
+    """
+    if len(timestamps) == 0:
+        return np.zeros(0, dtype=bool)
+    # Via total_seconds, not raw integers: pandas stores these at microsecond
+    # resolution here and nanosecond elsewhere, and dividing by a hardcoded
+    # nanosecond factor silently made every gap look 1000x smaller, so the
+    # guard never fired on the very hole it was written for.
+    gap_minutes = (
+        pd.Series(timestamps).diff().dt.total_seconds().to_numpy()[1:] / 60.0
+    )
+    contaminated = np.zeros(len(timestamps), dtype=bool)
+    for position in np.flatnonzero(gap_minutes > max_gap_minutes):
+        # The gap sits between position and position+1; every window ending in
+        # the next `window - 1` rows still contains bars from before it.
+        contaminated[position + 1 : position + window] = True
+    return contaminated
+
+
 def calculate_zscore(
-    frame: pd.DataFrame, window: int, seed_frame: pd.DataFrame | None = None
+    frame: pd.DataFrame,
+    window: int,
+    seed_frame: pd.DataFrame | None = None,
+    max_gap_minutes: float = 4 * 24 * 60.0,
 ) -> pd.DataFrame:
     if window <= 1:
         raise ValueError("--window must be greater than 1")
@@ -109,6 +148,11 @@ def calculate_zscore(
         output[mean_col] = rolling.mean().tail(len(output)).to_numpy()
         output[std_col] = rolling.std(ddof=0).tail(len(output)).to_numpy()
     valid = output[mean_col].notna() & output[std_col].notna() & (output[std_col] != 0)
+    if max_gap_minutes > 0:
+        spliced = gap_contaminated(
+            pd.DatetimeIndex(output["timestamp"]), window, max_gap_minutes
+        )
+        valid &= ~pd.Series(spliced, index=output.index)
     output["spread_zscore"] = pd.NA
     output.loc[valid, "spread_zscore"] = (
         (output.loc[valid, "spread"] - output.loc[valid, mean_col])
@@ -120,7 +164,10 @@ def calculate_zscore(
 
 
 def validate_output(
-    frame: pd.DataFrame, window: int, seed_frame: pd.DataFrame | None = None
+    frame: pd.DataFrame,
+    window: int,
+    seed_frame: pd.DataFrame | None = None,
+    max_gap_minutes: float = 4 * 24 * 60.0,
 ) -> None:
     timestamps = pd.DatetimeIndex(frame["timestamp"])
     if not timestamps.is_unique:
@@ -143,10 +190,30 @@ def validate_output(
     zero_std_rows = int(
         (frame[std_col].notna() & (frame[std_col] == 0)).sum()
     )
-    if actual_valid != expected_valid - zero_std_rows:
+    # Windows spliced across a hole in the data are invalidated too, so they
+    # are not "missing" valid rows -- they are rows deliberately withheld.
+    spliced = (
+        gap_contaminated(pd.DatetimeIndex(frame["timestamp"]), window, max_gap_minutes)
+        if max_gap_minutes > 0
+        else np.zeros(len(frame), dtype=bool)
+    )
+    # Only rows that would otherwise have counted: past warmup, with a usable
+    # std. Warmup rows are already invalid for lacking a full window.
+    countable = np.zeros(len(frame), dtype=bool)
+    countable[expected_warmup:] = True
+    spliced_rows = int(
+        (
+            spliced
+            & countable
+            & frame[std_col].notna().to_numpy()
+            & (frame[std_col] != 0).to_numpy()
+        ).sum()
+    )
+    expected_after_guards = expected_valid - zero_std_rows - spliced_rows
+    if actual_valid != expected_after_guards:
         raise RuntimeError(
-            f"Expected {expected_valid - zero_std_rows} valid z-score rows, "
-            f"got {actual_valid}"
+            f"Expected {expected_after_guards} valid z-score rows "
+            f"({spliced_rows} withheld for spanning a data gap), got {actual_valid}"
         )
 
     valid_rows = frame[frame["zscore_valid"]]
