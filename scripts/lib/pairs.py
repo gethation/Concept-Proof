@@ -107,9 +107,37 @@ SPECS: dict[tuple[str, str], TaifexGridSpec | UsRthSpec] = {
         pair="qff_tsm",
         interval_minutes=1,
         tw_leg=paths.QFF1_1M,
-        us_leg=paths.TSMUSDTP_1M,
+        # OKX, not Binance. The Binance perp archive starts 2026-07-07 and the
+        # OKX one 2026-04-01, and the TAIFEX leg now reaches 2025-12-31, so the
+        # US leg had become the binding constraint on a pair whose Taiwan side
+        # had just been extended by six months. This also brings the 1m and 15m
+        # configurations onto the same venue, which they were not before.
+        #
+        # It is a different book, not a relabelled one: executable_displacement
+        # was measured against Binance, so the cost side of any run using this
+        # leg is inherited rather than observed until it is re-measured on OKX.
+        us_leg=paths.OKX_TSMUSDTP_1M,
         fx_leg=paths.USDTTWD_1M,
         default_out="spread_1m",
+    ),
+    ("qff_tsm", "15m"): TaifexGridSpec(
+        pair="qff_tsm",
+        interval_minutes=15,
+        tw_leg=paths.QFF1_15M,
+        # OKX, not the Binance perp the 1m configuration uses. This grid exists
+        # to reach BACK, and its depth comes from tvdatafeed's QFF1! series --
+        # TAIFEX time-and-sales publishes 30 trading days, so the 1m pipeline
+        # cannot go before mid-July however it is run. The US leg follows the
+        # source the original 15m study used so the two are comparable; a
+        # Binance-legged 15m series would be a third thing again.
+        # The QFF-grid copies, not the plain 15m files. build_taifex_session_index
+        # anchors night bars at :25/:40/:55/:10 while the exchange files are
+        # :00/:15/:30/:45, so the plain files miss every night stamp and the
+        # build dies on the first one. These are the series the shipped
+        # spread_15m.csv was actually built from.
+        us_leg=paths.OKX_TSMUSDTP_15M_QFFGRID,
+        fx_leg=paths.USDTTWD_15M_QFFGRID,
+        default_out="spread_15m",
     ),
     ("ccf_umc", "1m"): UsRthSpec(
         pair="ccf_umc",
@@ -131,6 +159,52 @@ SPECS: dict[tuple[str, str], TaifexGridSpec | UsRthSpec] = {
         tw_leg=paths.CCF1_5M,
         us_leg=paths.UMC_5M,
         default_out="spread_5m",
+    ),
+    # Hourly exists for one reason: TradingView's anonymous endpoint serves a
+    # fixed ~5-6k bars whatever the interval, so the calendar span you get is
+    # bars x interval. CCF1! reaches 18 days at 1m and 602 at 1h, and TAIFEX's
+    # own time-and-sales archive is 30 trading days deep, so an hourly series
+    # is the only route to more than a year of this pair that exists at all.
+    #
+    # Every flag below mirrors the 1m entry, deliberately: this configuration's
+    # first job is a controlled comparison against 1m over their shared period,
+    # and any second difference would confound it. Only the two staleness
+    # bounds move, because the TAIFEX leg is aligned as-of and an hourly grid
+    # makes an hour of staleness structural rather than a warning sign.
+    ("ccf_umc", "1h"): UsRthSpec(
+        pair="ccf_umc",
+        interval_minutes=60,
+        tw_leg=paths.CCF1_1H,
+        us_leg=paths.UMC_1H,
+        # Every hour of the US session must have its own native CCF bar. Not the
+        # 1m entry's 7.7% equivalent, because the two thresholds guard different
+        # failures. At 1m a normal session prints hundreds of native bars and 30
+        # merely excludes the pathological. At 1h seven IS the maximum, and one
+        # missing hour is not a thin patch -- it means CCF's night session had
+        # not opened, so the as-of close reaches back to the 13:25 day close and
+        # the spread is built on a price eight hours old. Measured: that breaches
+        # the 240-minute staleness cap outright, at 525 minutes.
+        #
+        # THIS FILTER SELECTS, AND THE SELECTION IS NOT RANDOM. What survives is
+        # the subset of days CCF happened to trade actively all night, which is a
+        # biased sample and must not be read as "the same strategy, more data".
+        #
+        # 6, not 7. The window runs [first US bar, last US bar + 60min), and CCF
+        # anchors its night hours at :25. Under US standard time that window is
+        # [22:30, 05:30), which can hold at most six :25 bars (23:25..04:25) --
+        # 22:25 starts before the window and no 05:25 bar exists. A threshold of
+        # 7 was therefore unreachable every winter: all 129 standard-time
+        # sessions on file scored 0%, against 53.7% of the 283 DST sessions, so
+        # the series that exists to reach back a year was silently summer-only
+        # and the "33% of 2025 complete" figure above was largely this artifact.
+        min_tw_bars_per_session=6,
+        fx_session_filter=False,
+        range_includes_fx=False,
+        tw_staleness_warn_minutes=60.0,
+        tw_staleness_max_minutes=240.0,
+        validate_masks=False,
+        fx_output="ohlcv",
+        default_out="spread_1h",
     ),
     ("ccf_umc", "15m"): UsRthSpec(
         pair="ccf_umc",

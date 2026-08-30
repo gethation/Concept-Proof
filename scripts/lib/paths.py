@@ -44,10 +44,12 @@ QFF1_15M = TAIFEX / "qff1_15m.csv"
 CCF1_1M = TAIFEX / "ccf1_1m.csv"
 CCF1_5M = TAIFEX / "ccf1_5m.csv"
 CCF1_15M = TAIFEX / "ccf1_15m.csv"
+CCF1_1H = TAIFEX / "ccf1_1h.csv"
 
 UMC_1M = NYSE / "umc_1m.csv"
 UMC_5M = NYSE / "umc_5m.csv"
 UMC_15M = NYSE / "umc_15m.csv"
+UMC_1H = NYSE / "umc_1h.csv"
 
 TSMUSDTP_1M = BINANCE / "tsmusdtp_1m.csv"
 USDTTWD_1M = BITOPRO / "usdttwd_1m.csv"
@@ -55,6 +57,10 @@ USDTTWD_1M = BITOPRO / "usdttwd_1m.csv"
 OKX_TSMUSDTP_1M = OKX / "tsmusdtp_1m.csv"
 OKX_TSMUSDTP_15M = OKX / "tsmusdtp_15m.csv"
 USDTTWD_15M = BITOPRO / "usdttwd_15m.csv"
+# Re-anchored onto the TAIFEX QFF 15m grid (night bars at :25/:40/:55/:10).
+# The exchange files above are :00/:15/:30/:45 and cannot serve a QFF index.
+OKX_TSMUSDTP_15M_QFFGRID = OKX / "tsmusdtp_15m_qffgrid.csv"
+USDTTWD_15M_QFFGRID = BITOPRO / "usdttwd_15m_qffgrid.csv"
 
 # FX_IDC splice inputs, finest interval first (see lib.fx.build_fx_series).
 FX_IDC_SPLICE: list[tuple[int, Path]] = [
