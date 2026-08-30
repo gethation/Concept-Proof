@@ -41,6 +41,7 @@ from backtest import engine  # noqa: E402
 from backtest import grid  # noqa: E402
 from backtest.scale_in import (  # noqa: E402
     ScaleInParams,
+    default_be_cost_floor,
     run_scale_in,
     write_scale_in_outputs,
 )
@@ -52,6 +53,11 @@ HEADLINE = dict(
     entry_z=1.0,
     exit_z=0.25,
     displacement=0.2317,
+    # The report anchors the displacement at CCF's measurement price and scales
+    # it 1/price per bar. Omitting this ran the whole study on a flat 0.2317 --
+    # a cheaper market than the headline it claims to reproduce, and cheapest
+    # exactly on the low-price months this experiment is about.
+    ref_price=121.50,
 )
 CAPITAL = 2_000_000.0
 LEG_NOTIONAL = 1_000_000.0
@@ -59,7 +65,7 @@ OUT_DIR = paths.run_dir("scale_in_study")
 
 SPACINGS = [0.5, 0.75, 1.0, 1.5, 2.0]
 TRANCHE_COUNTS = [2, 3]
-# (exit_mode, be_offset_k); the cost floor is 2 x displacement, set below.
+# (exit_mode, be_offset_k); the cost floor covers crossings AND fees, set below.
 EXIT_VARIANTS = [("basket", 0.0), ("breakeven", 0.0), ("breakeven", 0.5)]
 
 
@@ -76,6 +82,7 @@ def headline_params() -> engine.BacktestParams:
         qff_tax_rate=2e-5,
         qff_contract_multiplier=2000.0,
         executable_displacement=HEADLINE["displacement"],
+        displacement_ref_price=HEADLINE["ref_price"],
     )
 
 
@@ -219,7 +226,7 @@ def summarise_run(result, label: dict) -> dict:
 def main() -> int:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     base = headline_params()
-    be_cost_floor = 2.0 * HEADLINE["displacement"]
+    be_cost_floor = default_be_cost_floor(base)
 
     print("building z-score frame "
           f"(w{HEADLINE['window']}, CCF/UMC spread_1m)...")

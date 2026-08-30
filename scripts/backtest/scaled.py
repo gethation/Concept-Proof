@@ -74,6 +74,9 @@ class ScaledParams:
     qff_lots: int = 0
     qff_fee_bps: float = 0.0
     executable_displacement: float = 0.0
+    tsm_fee_model: str = "bps"
+    tsm_share_ratio: float = base.ADR_SHARE_RATIO
+    displacement_ref_price: float = 0.0
 
 
 @dataclass

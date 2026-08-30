@@ -79,6 +79,7 @@ from backtest.engine import (  # noqa: E402
     add_trading_masks,
     compute_next_indices,
     direction_sign,
+    displacement_at,
     entry_direction,
     executable_zscores,
     fill_costs,
@@ -93,6 +94,34 @@ from backtest.engine import (  # noqa: E402
     validate_params,
 )
 from lib import paths  # noqa: E402
+
+
+def default_be_cost_floor(base: BacktestParams) -> float:
+    """Round-trip cost of one tranche, in spread units.
+
+    Two crossings plus the commissions and tax the crossings do not include.
+    The old default was 2 x displacement alone, so a basket closing exactly at
+    the trigger recovered the book gap and nothing else -- roughly 650 TWD of
+    fees per 2-contract CCF basket, about 11 bps of leg notional, booked as a
+    loss on every exit the rule called "breakeven". The docstring above already
+    said commissions and tax belonged here; now they are.
+
+    Priced on the params' own nominal leg notional, so the floor is one number
+    for the run rather than something that moves with each basket's fill.
+    """
+    notional = base.leg_notional_twd
+    if notional <= 0:
+        return 2.0 * base.executable_displacement
+    contracts = max(1.0, round(notional / (base.qff_contract_multiplier * 100.0)))
+    # Futures leg: flat fee per contract per side, plus the exchange tax.
+    futures = 2.0 * contracts * base.qff_fee_per_contract_twd
+    tax = 2.0 * notional * base.qff_tax_rate
+    # US leg: the bps model both ways is the right order of magnitude for the
+    # floor even under the per-share model, which crosses it near $23/ADR.
+    us_leg = 2.0 * notional * base.tsm_fee_bps / 10_000.0
+    fee_spread_units = (futures + tax + us_leg) / notional * 100.0
+    return 2.0 * base.executable_displacement + fee_spread_units
+
 
 BREAKEVEN_EXIT = "breakeven_exit"
 ZSCORE_EXIT = "zscore_exit"
@@ -188,22 +217,34 @@ def run_scale_in(frame: pd.DataFrame, params: ScaleInParams) -> ScaleInResult:
     if "spread" not in data.columns:
         raise RuntimeError("scale_in needs the raw spread column for add spacing")
     spread_level = data["spread"].to_numpy(dtype=float)
-    spread_std = (
-        data[std_col].to_numpy(dtype=float) if std_col is not None else np.ones(n_rows)
-    )
     if std_col is None:
         raise RuntimeError(
             "scale_in needs a rolling spread std column (spread_std*) to freeze "
             "the add spacing at entry"
         )
+    # No all-ones fallback. Synthesising a std would reinterpret displacement
+    # from spread units into raw z and rescale the add spacing at the same
+    # time, both silently.
+    spread_std = data[std_col].to_numpy(dtype=float)
     entry_allowed = data["entry_allowed"].to_numpy(dtype=bool)
     close_allowed = data["close_allowed"].to_numpy(dtype=bool)
     friday_session_end = data["friday_session_end_force_close"].to_numpy(dtype=bool)
 
-    require_spread_std_for_displacement(std_col, params.base)
-    z_short, z_long = executable_zscores(
-        zscore, spread_std, zvalid, params.base.executable_displacement
+    # The per-bar displacement, derived exactly as engine.run_backtest derives
+    # it: the frame's column when it carries one (a tick-regime schedule), then
+    # scaled by ref/price. Feeding the raw scalar here while fill_costs applied
+    # the scaled value split the two halves of one correction -- thresholds
+    # shifted by one number, crossings charged at another.
+    base_disp = (
+        data["executable_displacement"].to_numpy(dtype=float)
+        if "executable_displacement" in data.columns
+        else np.full(n_rows, params.base.executable_displacement)
     )
+    bar_disp = displacement_at(qff, params.base, base_disp)
+    require_spread_std_for_displacement(
+        std_col, params.base, bool(np.any(bar_disp > 0.0))
+    )
+    z_short, z_long = executable_zscores(zscore, spread_std, zvalid, bar_disp)
     entry_observation = entry_allowed & zvalid
     close_observation = close_allowed & zvalid
     next_entry_fill = compute_next_indices(entry_allowed)
@@ -266,6 +307,7 @@ def run_scale_in(frame: pd.DataFrame, params: ScaleInParams) -> ScaleInResult:
             params=per_tranche,
             tsm_side=us_side(sizing.tsm_units),
             usdtwd=usdtwd_entry[index],
+            displacement=bar_disp[index],
         )
         realized_pnl -= entry_costs["total_fee_twd"]
         m = len(tranches) + 1
@@ -345,6 +387,7 @@ def run_scale_in(frame: pd.DataFrame, params: ScaleInParams) -> ScaleInResult:
             params=per_tranche,
             tsm_side=us_side(-total_tsm_units),
             usdtwd=exit_fx,
+            displacement=bar_disp[index],
         )
 
         basket_gross = 0.0
@@ -478,11 +521,19 @@ def run_scale_in(frame: pd.DataFrame, params: ScaleInParams) -> ScaleInResult:
                         pending_signal_idx = index
                         pending_fill_idx = fill_idx
 
-        elif not filled_this_bar and tranches:
+        # Skip the exit check only on the bar tranche 1 fills -- that is the
+        # single engine's own behaviour, and n=1 parity depends on it. Once a
+        # basket exists, an add filling (or waiting to fill) must not suppress
+        # the exit: adds fire at adverse extremes, which is exactly where the
+        # reversal that should close the basket tends to start, so discarding
+        # those signals lengthened holds only in the multi-tranche cells --
+        # biasing the very comparison this engine exists to make, in a
+        # direction n=1 parity could never reveal.
+        elif tranches and not (filled_this_bar and len(tranches) == 1):
             adverse = direction_sign(direction) * (spread_level[index] - ref_spread)
             basket_mae_spread = max(basket_mae_spread, adverse)
 
-            if pending_kind is None and close_observation[index]:
+            if pending_kind != "exit" and close_observation[index]:
                 exit_reason: str | None = None
                 if (
                     params.exit_mode == "breakeven"
@@ -503,6 +554,8 @@ def run_scale_in(frame: pd.DataFrame, params: ScaleInParams) -> ScaleInResult:
                 if exit_reason is not None:
                     fill_idx = next_close_fill[index]
                     if fill_idx != -1:
+                        # An exit outranks an add that has not filled yet:
+                        # cancel the add rather than sizing up into a reversal.
                         pending_kind = "exit"
                         pending_signal_idx = index
                         pending_fill_idx = fill_idx
@@ -633,6 +686,10 @@ def build_scale_in_summary(
             "qff_tax_rate": base.qff_tax_rate,
             "qff_contract_multiplier": base.qff_contract_multiplier,
             "executable_displacement": base.executable_displacement,
+            # Both change what a run costs, and both were missing, so a run
+            # varying either was unreproducible from its own manifest.
+            "displacement_ref_price": base.displacement_ref_price,
+            "qff_fee_bps": base.qff_fee_bps,
         },
         "rows": int(len(equity)),
         "start": format_timestamp(equity["timestamp"].iloc[0]),
@@ -772,7 +829,7 @@ def main(argv: list[str]) -> int:
         executable_displacement=args.displacement,
     )
     be_cost_floor = (
-        2.0 * args.displacement if args.be_cost_floor < 0 else args.be_cost_floor
+        default_be_cost_floor(base) if args.be_cost_floor < 0 else args.be_cost_floor
     )
     params = ScaleInParams(
         base=base,
