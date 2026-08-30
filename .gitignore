@@ -11,18 +11,22 @@
 # from the source archives.
 data/raw/
 
-# Canonical bar series. NOT in git: ~85 MB of CSV that grows by append, so every
-# refresh would commit a whole new copy of each file.
+# data/bars/ and data/features/ WERE ignored, for two good reasons that were
+# both overruled deliberately: ~108 MB of append-growing CSV whose every
+# refresh commits a fresh copy, and the fact that they are reproducible from
+# nothing else once a day ages out.
 #
-# These are the one thing here that cannot be regenerated from anything else in
-# the repo -- tvdatafeed's anonymous endpoint only serves a rolling ~6 weeks, so
-# an aged-out day is gone for good. Back this directory up somewhere outside the
-# repo, or move it to git-lfs / DVC if it should be versioned.
-data/bars/
-
-# Spread and z-score series: a pure function of data/bars plus parameters.
-# Rebuild with scripts/features/spread.py and scripts/features/zscore.py.
-data/features/
+# They are tracked now so the published results can actually be re-run by
+# someone who is not us. That is the whole point: a backtest nobody can
+# reproduce is a claim, not a result. tvdatafeed's anonymous endpoint serves a
+# rolling ~6 weeks and TAIFEX publishes 30 trading days, so these files are the
+# only surviving copy of most of the sample.
+#
+# Note what that means for provenance: data/bars/taifex is derived from a
+# PURCHASED TAIFEX time-and-sales archive, data/bars/nyse from IBKR, and the
+# tv-sourced series from TradingView -- each under its own terms. The feature
+# files are not a shield: spread_1m.csv carries qff_close, tsm_close and
+# usdttwd_close, i.e. the vendor prices themselves.
 
 # Equity curves are a cumulative function of the run's own trades.csv, and are
 # by far the biggest thing a backtest writes. summary.json and trades.csv from
