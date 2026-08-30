@@ -120,10 +120,23 @@ def build_taifex_grid(spec: TaifexGridSpec, args: argparse.Namespace) -> dict:
     us_close = read_close_series(args.us_path, "tsm_close")
     fx_close = read_close_series(args.fx_path, "usdttwd_close")
 
+    # The TAIFEX leg defines the index, so a slice has to be taken here rather
+    # than after alignment: assert_external_complete demands a US quote for
+    # every TAIFEX minute, and a TAIFEX archive that reaches further back than
+    # the US feed would fail on months nobody asked to score. --start / --end
+    # are how the README says to take a historical slice; they were only ever
+    # read on the US-RTH path.
+    if args.start:
+        tw_close = tw_close[tw_close.index >= parse_taipei(args.start)]
+    if args.end:
+        tw_close = tw_close[tw_close.index <= parse_taipei(args.end)]
+    if tw_close.empty:
+        raise RuntimeError("No TAIFEX bars inside the requested --start/--end range")
+
     if args.alignment == "continuous":
         index = pd.date_range(tw_close.index[0], tw_close.index[-1], freq="min")
     else:
-        index = build_taifex_session_index(tw_close)
+        index = build_taifex_session_index(tw_close, spec.interval_minutes)
 
     assert_external_complete(us_close, index)
     assert_external_complete(fx_close, index)
@@ -260,7 +273,16 @@ def select_sessions(
 def build_us_rth(spec: UsRthSpec, args: argparse.Namespace) -> dict:
     tw = read_ohlcv(args.tw_path, "TAIFEX leg")
     us = read_ohlcv(args.us_path, "US leg")
-    fx = build_fx_series(spec.fx_splice)
+    # An explicit --fx-path replaces the whole splice with a single file. That
+    # is how a mid-basis rebuild swaps FX_IDC for the live system's own
+    # reference rate: the splice exists because FX_IDC publishes one series at
+    # three intervals each with multi-hour holes, and a single complete series
+    # has no holes to patch.
+    fx = build_fx_series(
+        [(args.fx_interval_minutes, args.fx_path)]
+        if args.fx_path
+        else spec.fx_splice
+    )
     interval = spec.interval_minutes
 
     lower = [tw["timestamp"].iloc[0], us["timestamp"].iloc[0]]
@@ -479,11 +501,16 @@ def summarise(frame: pd.DataFrame, out_path: Path) -> None:
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--pair", required=True, choices=["qff_tsm", "ccf_umc"])
-    parser.add_argument("--interval", default="1m", choices=["1m", "5m", "15m"])
+    parser.add_argument("--interval", default="1m",
+                        choices=["1m", "5m", "15m", "1h"])
     parser.add_argument("--tw-path", type=Path, default=None)
     parser.add_argument("--us-path", type=Path, default=None)
     parser.add_argument("--fx-path", type=Path, default=None,
-                        help="TAIFEX-grid pairs only: the FX close series.")
+                        help="Replace the pair's FX source with this one file. "
+                             "On US-RTH pairs it replaces the FX_IDC splice.")
+    parser.add_argument("--fx-interval-minutes", type=int, default=1,
+                        help="Bar interval of --fx-path, used to decide when "
+                             "each FX close became known. Default 1.")
     parser.add_argument("--out", type=Path, default=None)
     parser.add_argument("--start", default=None)
     parser.add_argument("--end", default=None)
