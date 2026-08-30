@@ -27,10 +27,37 @@ from lib import paths  # noqa: E402
 from report import theme as T  # noqa: E402
 
 WINDOWS = [390, 780, 1560, 2500, 3900]
-ENTRIES = [0.75, 1.0, 1.5, 2.0, 2.5]
+# Extended past 2.5 because QFF/TSM could not clear its own microstructure
+# screen anywhere below it: after TAIFEX cut the tick to 1 TWD the cheap
+# crossing cost made low thresholds look profitable while 45% of the trades
+# they took earned less than one tick. If nothing here clears the screen
+# either, the answer is that the pair has no viable configuration under the
+# current tick, not that the grid was too small.
+ENTRIES = [0.75, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5]
 EXITS = [-0.25, 0.0, 0.25, 0.5]
 CAPITAL = 2_000_000.0
 LEG_NOTIONAL = 1_000_000.0
+
+
+@dataclass
+class TickRegime:
+    """One exchange rule period: what a tick was worth, and what it cost to cross.
+
+    A contract's tick size is not a constant of the instrument. TAIFEX cut QFF
+    from 5 TWD to 1 TWD on 2026-07-05, which moved both numbers this project
+    measures everything against at once -- the crossing cost fell by four
+    fifths, and so did the noise floor that decides whether an edge is
+    distinguishable from a fill landing on the wrong side.
+
+    Splitting the sample at the break was the first answer, and it cost a
+    report that could only ever cover the shorter half. Carrying the schedule
+    instead lets one run span the change with the right numbers on either side
+    of it.
+    """
+
+    effective_from: str | None  # None = from the start of the data
+    tick_twd: float  # per contract, i.e. tick per share x multiplier
+    displacement: float  # measured or derived for THIS regime
 
 
 @dataclass
@@ -40,6 +67,13 @@ class Segment:
     end: str | None
     displacement: float
     note: str
+    # The futures price `displacement` was measured at. A tick is fixed in TWD
+    # and a spread unit is not, so the same book width is a different number of
+    # spread units at a different price. 0 keeps the displacement constant.
+    ref_price: float = 0.0
+    # Set to span a tick-size change. `displacement` and the pair's tick_twd
+    # then apply only where no regime covers the bar.
+    regimes: list[TickRegime] = field(default_factory=list)
 
 
 @dataclass
@@ -52,6 +86,7 @@ class PairSpec:
     tick_twd: float
     tick_desc: str
     equity_fee_bps: float
+    equity_fee_model: str
     futures_fee_twd: float
     multiplier: float
     tax_rate: float
@@ -61,6 +96,13 @@ class PairSpec:
     futures_leg: str
     legs_zh: str = ""
     extra: str = ""
+    # OHLCV sources for the two legs and FX. Without them the engine has no
+    # open prices to fill at and silently falls back to the fill bar's CLOSE --
+    # which is what every report published while its own prose promised the
+    # next bar's open.
+    tw_ohlcv: Path | None = None
+    us_ohlcv: Path | None = None
+    fx_ohlcv: Path | None = None
     _cache: dict = field(default_factory=dict, repr=False)
 
 
@@ -74,6 +116,9 @@ PAIRS = {
         tick_twd=0.5 * 2000,
         tick_desc="0.5 TWD × 2,000 shares = 1,000 TWD per contract",
         equity_fee_bps=2.5,
+        # IBKR bills per ADR, not per dollar. At UMC's current $18-19 the flat
+        # 2.5 bps under-charges by about 13%; the two models cross near $23.2.
+        equity_fee_model="ibkr",
         futures_fee_twd=88.0,
         multiplier=2000.0,
         tax_rate=2e-5,
@@ -81,47 +126,65 @@ PAIRS = {
         equity_leg="UMC ADR",
         futures_leg="CCF",
         legs_zh="TAIFEX CCF（UMC 股票期貨）與其在 NYSE 掛牌的 UMC ADR",
+        tw_ohlcv=paths.CCF1_1M,
+        us_ohlcv=paths.UMC_1M,
+        fx_ohlcv=paths.USDTTWD_1M,
         segments=[
             Segment(
                 "全期間", None, None, 0.2317,
                 "由 2,618 根實盤分鐘 bar（2026-08-07~19）直接量測盤口寬度："
                 "單邊位移 0.2317 spread 單位，來回 46.3 bps。"
                 "先前以 tick 寬度出現頻率推得 0.2151（CCF 一個 tick 佔 98.2%、"
-                "UMC 一美分佔 99.9%），兩種量法相差 8%。",
+                "UMC 一美分佔 99.9%），兩種量法相差 8%。"
+                "量測期間 CCF 中位價 121.50，位移隨價位以 1/price 縮放。",
+                ref_price=121.50,
             )
         ],
     ),
     "qff_tsm": PairSpec(
         key="qff_tsm",
         name="QFF / TSM",
-        legs="TAIFEX QFF (TSMC stock futures) against the Binance TSMUSDT perpetual",
+        legs="TAIFEX QFF (TSMC stock futures) against the OKX TSM-USDT perpetual",
         spread=paths.feature("qff_tsm", "spread_1m"),
         seed=paths.feature("qff_tsm", "seed"),
         tick_twd=1.0 * 100,
         tick_desc="1 TWD × 100 shares = 100 TWD per contract（2026-07-05 起）",
         equity_fee_bps=5.0,
+        # The perp venue charges in bps of notional, so the flat model is the
+        # right shape here -- this is not an unmeasured default. The RATE and
+        # the displacement below were both measured on Binance's book; the data
+        # is now OKX's, which is thinner, so both are inherited rather than
+        # observed until they are re-measured. Section 6 says so.
+        equity_fee_model="bps",
         futures_fee_twd=88.0,
         multiplier=100.0,
         tax_rate=2e-5,
         out=paths.report("qff_tsm_report"),
         equity_leg="TSM perp",
         futures_leg="QFF",
-        legs_zh="TAIFEX QFF（台積電股票期貨）與 Binance 的 TSMUSDT 永續合約",
+        legs_zh="TAIFEX QFF（台積電股票期貨）與 OKX 的 TSM-USDT 永續合約",
+        tw_ohlcv=paths.QFF1_1M,
+        us_ohlcv=paths.OKX_TSMUSDTP_1M,
+        fx_ohlcv=paths.USDTTWD_1M,
         segments=[
             Segment(
-                "tick 變更後", "2026-07-06", None, 0.0755,
-                "QFF tick 1 TWD @ ~2,398 = 4.17 bps，TSM perp 觸價 0.70 bps；"
-                "單邊位移 0.0755，來回 15.1 bps。",
-            ),
-            Segment(
-                "tick 變更前", None, "2026-07-04", 0.1589,
-                "QFF tick 為 5 TWD，單邊半 tick 由 0.0209 升至 0.1043 spread 單位，"
-                "其餘成分不變，故位移推得 0.1589（推導值，非直接量測）。",
+                "全期間（跨 tick 變更）", None, None, 0.0755,
+                "2026-07-05 之前 tick 為 5 TWD、位移 0.1589（由半 tick 0.1043 加"
+                "其餘成分推得）；之後 tick 1 TWD、位移 0.0755（量測值）。"
+                "兩者都錨在 QFF 中位價 2,390，並隨價位以 1/price 縮放。"
+                "每筆交易的 tick 以其進場當下的制度計算，不是全期間共用一個。",
+                ref_price=2390.0,
+                regimes=[
+                    TickRegime(None, 5.0 * 100, 0.1589),
+                    TickRegime("2026-07-05", 1.0 * 100, 0.0755),
+                ],
             ),
         ],
         extra=(
-            "QFF 的最小跳動單位在 <b>2026-07-05</b> 由 5 TWD 改為 1 TWD，盤口價差成本一次降掉八成。"
-            "單一位移參數跨不過這個斷點，因此本報告以變更後區間為主，變更前區間另列對照。"
+            "QFF 的最小跳動單位在 <b>2026-07-05</b> 由 5 TWD 改為 1 TWD，盤口價差成本一次降掉八成——"
+            "但雜訊地板也跟著降了八成。本報告逐 bar 套用當下制度的位移，逐筆交易以其進場當下的 tick "
+            "衡量邊際，因此樣本可以跨過這個斷點；代價是報告混合了兩種市場結構，"
+            "讀數字時要記得變更前後不是同一個東西。"
         ),
     ),
 }
@@ -139,7 +202,58 @@ def load_frames(spec: PairSpec) -> tuple[pd.DataFrame, pd.DataFrame | None]:
         seed = seed[pd.DatetimeIndex(seed["timestamp"]) < first]
         if seed.empty:
             seed = None
+    if spec.tw_ohlcv and spec.us_ohlcv and spec.fx_ohlcv:
+        # Once, on the spread frame: calculate_zscore copies it per window, so
+        # the opens ride along into every grid cell without re-reading the
+        # OHLCV files 140 times.
+        spread = backtest.add_entry_open_prices(
+            spread, spec.tw_ohlcv, spec.us_ohlcv, spec.fx_ohlcv
+        )
     return spread, seed
+
+
+def regime_series(spec: PairSpec, seg: Segment, timestamps) -> tuple[pd.Series, pd.Series]:
+    """Per-bar (tick_twd, displacement) for a segment.
+
+    With no regimes this is the segment's single displacement and the pair's
+    single tick, repeated -- exactly what the scalar path did.
+    """
+    ts = pd.DatetimeIndex(timestamps)
+    tick = pd.Series(spec.tick_twd, index=range(len(ts)), dtype=float)
+    disp = pd.Series(seg.displacement, index=range(len(ts)), dtype=float)
+    for regime in seg.regimes:
+        mask = (
+            np.ones(len(ts), dtype=bool)
+            if regime.effective_from is None
+            else np.asarray(ts >= pd.Timestamp(regime.effective_from, tz="Asia/Taipei"))
+        )
+        tick[mask] = regime.tick_twd
+        disp[mask] = regime.displacement
+    return tick, disp
+
+
+def with_displacement_column(spec: PairSpec, seg: Segment, frame: pd.DataFrame):
+    """Attach the per-bar base displacement the engine reads, when it varies."""
+    if not seg.regimes:
+        return frame
+    out = frame.copy()
+    _, disp = regime_series(spec, seg, out["timestamp"])
+    out["executable_displacement"] = disp.to_numpy()
+    return out
+
+
+def trade_ticks(spec: PairSpec, seg: Segment, trades: pd.DataFrame) -> pd.Series:
+    """Net PnL per contract in ticks, using the tick in force at ENTRY.
+
+    A tick is the noise floor a trade has to clear, and which floor applied is a
+    property of when the trade happened. Dividing a 5 TWD-tick trade by a 1 TWD
+    tick would inflate its edge fivefold and quietly walk it through the screen.
+    """
+    per_contract = trades["net_pnl_twd"] / trades["qff_contracts"].abs()
+    if not seg.regimes:
+        return per_contract / spec.tick_twd
+    tick, _ = regime_series(spec, seg, pd.to_datetime(trades["entry_time"]))
+    return per_contract.reset_index(drop=True) / tick
 
 
 def slice_segment(frame: pd.DataFrame, seg: Segment) -> pd.DataFrame:
@@ -152,7 +266,9 @@ def slice_segment(frame: pd.DataFrame, seg: Segment) -> pd.DataFrame:
     return frame[mask].copy()
 
 
-def params_for(spec: PairSpec, entry_z: float, exit_z: float, disp: float):
+def params_for(
+    spec: PairSpec, entry_z: float, exit_z: float, disp: float, ref_price: float = 0.0
+):
     return backtest.BacktestParams(
         entry_z=entry_z,
         exit_z=exit_z,
@@ -160,10 +276,12 @@ def params_for(spec: PairSpec, entry_z: float, exit_z: float, disp: float):
         initial_capital_twd=CAPITAL,
         max_entry_delay_minutes=15,
         tsm_fee_bps=spec.equity_fee_bps,
+        tsm_fee_model=spec.equity_fee_model,
         qff_fee_per_contract_twd=spec.futures_fee_twd,
         qff_tax_rate=spec.tax_rate,
         qff_contract_multiplier=spec.multiplier,
         executable_displacement=disp,
+        displacement_ref_price=ref_price,
     )
 
 
@@ -172,24 +290,38 @@ def run_grid(spec: PairSpec, spread: pd.DataFrame, seed, seg: Segment) -> pd.Dat
     for window in WINDOWS:
         zframe = zscore_calc.calculate_zscore(spread, window, seed_frame=seed)
         zframe = slice_segment(zframe, seg)
+        zframe = with_displacement_column(spec, seg, zframe)
         for entry_z in ENTRIES:
             for exit_z in EXITS:
                 if exit_z < -entry_z:
                     continue
-                res = backtest.run_backtest(zframe, params_for(spec, entry_z, exit_z, seg.displacement))
+                res = backtest.run_backtest(
+                    zframe,
+                    params_for(spec, entry_z, exit_z, seg.displacement, seg.ref_price),
+                )
                 t = res.trades
                 stats = grid.calculate_daily_return_stats(
                     res.equity, initial_capital_twd=CAPITAL, annual_trading_days=252.0
                 )
+                # Linear annualisation of the period return. It is an
+                # extrapolation, not a measurement -- a 148-day sample scaled
+                # by 2.5 -- so it is carried alongside `ret`, never instead of
+                # it, and the report quotes the raw period return first.
+                span_days = (
+                    pd.Timestamp(res.summary["end"])
+                    - pd.Timestamp(res.summary["start"])
+                ).total_seconds() / 86400.0
                 row = dict(
                     window=window, entry_z=entry_z, exit_z=exit_z,
                     sharpe=stats["sharpe_ratio"], trades=len(t),
                     net=float(res.summary["net_pnl_twd"]),
                     maxdd=float(res.summary["max_drawdown_pct"]),
                     ret=float(res.summary["return_pct"]),
+                    ann=float(res.summary["return_pct"]) * 365.0 / span_days,
+                    span_days=span_days,
                 )
                 if len(t):
-                    ticks = (t["net_pnl_twd"] / t["qff_contracts"].abs()) / spec.tick_twd
+                    ticks = trade_ticks(spec, seg, t)
                     row.update(
                         med_ticks=float(ticks.median()),
                         under1=float((ticks < 1).mean()),
@@ -235,14 +367,16 @@ def screen(g: pd.DataFrame) -> pd.DataFrame:
 def trade_detail(spec: PairSpec, spread, seed, seg: Segment, cell) -> tuple:
     zframe = zscore_calc.calculate_zscore(spread, int(cell.window), seed_frame=seed)
     zframe = slice_segment(zframe, seg)
+    zframe = with_displacement_column(spec, seg, zframe)
     res = backtest.run_backtest(
-        zframe, params_for(spec, cell.entry_z, cell.exit_z, seg.displacement)
+        zframe,
+        params_for(spec, cell.entry_z, cell.exit_z, seg.displacement, seg.ref_price),
     )
     t = res.trades.copy()
     for c in ("entry_time", "exit_time"):
         t[c] = pd.to_datetime(t[c])
     t["hours"] = t["holding_minutes"] / 60.0
-    t["ticks"] = (t["net_pnl_twd"] / t["qff_contracts"].abs()) / spec.tick_twd
+    t["ticks"] = trade_ticks(spec, seg, t).to_numpy()
     # Scale-free per-trade result: bps of the leg notional that trade actually
     # carried. Independent of the capital base typed into the backtest, and
     # directly comparable across pairs and across sizing modes.
@@ -297,7 +431,22 @@ def anatomy_figure(spec, zframe, trades, pick, seg, fignum: int) -> str:
     mean_col, std_col = backtest.find_spread_stat_columns(list(win.columns))
     z = win["spread_zscore"].to_numpy(dtype=float)
     std = win[std_col].to_numpy(dtype=float)
-    gap = seg.displacement / std
+    # The displacement the ENGINE used on these bars: the per-bar regime value
+    # when the frame carries one, then scaled by ref/price. Drawing the segment
+    # scalar instead put the bands at up to half their true width, so the
+    # figure showed threshold crossings the engine's own z never made -- on a
+    # panel captioned as the three z the engine judged by.
+    base_disp = (
+        win["executable_displacement"].to_numpy(dtype=float)
+        if "executable_displacement" in win.columns
+        else np.full(len(win), seg.displacement)
+    )
+    bar_disp = backtest.displacement_at(
+        win["qff_close_filled"].to_numpy(dtype=float),
+        params_for(spec, pick.entry_z, pick.exit_z, seg.displacement, seg.ref_price),
+        base_disp,
+    )
+    gap = bar_disp / std
     short_side = ex["direction"] == backtest.SHORT_TSM_LONG_QFF
     ts = pd.to_datetime(win["timestamp"])
 
@@ -349,15 +498,46 @@ def build(spec: PairSpec) -> None:
 
     results = []
     for seg in spec.segments:
+        # A segment can outlive its data. QFF/TSM's pre-tick-change segment is
+        # bounded at 2026-07-04, and TAIFEX publishes 30 trading days, so once
+        # the window rolls past that date the slice is empty -- an empty frame
+        # reaches build_summary and dies on equity.iloc[-1]. Skipping says so
+        # and still builds the report from the segments that do have data;
+        # crashing produced no report at all.
+        if slice_segment(spread, seg).empty:
+            print(f" segment {seg.label}: no data in range, skipped")
+            continue
         print(f" segment {seg.label}")
         g = run_grid(spec, spread, seed, seg)
         g["neighbour"] = neighbour_sharpe(g)
         surv = screen(g)
-        pick = (surv if len(surv) else g).nlargest(1, "sharpe").iloc[0]
+        # The headline is the highest linearly-annualised return in the grid,
+        # screened or not. That is a deliberate choice of ranking, and it makes
+        # the screen a LABEL rather than a filter -- so `screened` now means
+        # "this pick passed", not "something passed", and the report says which
+        # of the two it is. Ranking by return and silently reporting it as
+        # screened is the one combination that is not allowed.
+        pick = g.nlargest(1, "ann").iloc[0]
+        screened = bool(
+            len(surv)
+            and (
+                (surv["window"] == pick.window)
+                & (surv["entry_z"] == pick.entry_z)
+                & (surv["exit_z"] == pick.exit_z)
+            ).any()
+        )
         res, trades = trade_detail(spec, spread, seed, seg, pick)
-        results.append((seg, g, surv, pick, res, trades))
+        results.append((seg, g, surv, pick, res, trades, screened))
 
-    seg, g, surv, pick, res, trades = results[0]
+    if not results:
+        raise RuntimeError(
+            f"{spec.name}: no segment has data. Spread covers "
+            f"{pd.DatetimeIndex(spread['timestamp']).min()} to "
+            f"{pd.DatetimeIndex(spread['timestamp']).max()}; segments are "
+            + ", ".join(f"{s.label} [{s.start or 'open'}..{s.end or 'open'}]"
+                        for s in spec.segments)
+        )
+    seg, g, surv, pick, res, trades, screened = results[0]
     s = res.summary
     labels, eq = session_equity(res.equity)
     sessions = len(labels)
@@ -401,8 +581,15 @@ def build(spec: PairSpec) -> None:
         f"價差（spread）相對其滾動均值偏離達 entry_z 個標準差時進場，"
         f"回歸至 exit_z 時平倉。訊號與成交都以<strong>可成交價</strong>評分 —— "
         f"引擎為每個方向各建一條「該筆委託真正要跨過的那一側」的 spread，而非中價（見第 1 節）。</p>"
-        f"<p>在 {sessions} 個 session、{days:.0f} 個日曆日的樣本上，經篩選後的建議組態為 "
-        f"<code>window {pick.window:.0f} / entry_z {pick.entry_z:g} / exit_z {pick.exit_z:g}</code>，"
+        + (
+            f"<p>在 {sessions} 個 session、{days:.0f} 個日曆日的樣本上，"
+            f"依<strong>線性年化報酬</strong>排序的第一名為（該格同時通過四道品質門檻）："
+            if screened else
+            f"<p>在 {sessions} 個 session、{days:.0f} 個日曆日的樣本上，"
+            f"依<strong>線性年化報酬</strong>排序的第一名為 "
+            f"<strong>（此格未通過四道品質門檻，見第 3 節）</strong>："
+        )
+        + f"<code>window {pick.window:.0f} / entry_z {pick.entry_z:g} / exit_z {pick.exit_z:g}</code>，"
         f"取得 <strong>{len(trades)} 筆交易</strong>、總報酬 "
         f"<strong>{s['return_pct'] * 100:.2f}%</strong>（線性年化 "
         f"{s['return_pct'] * 365.0 / days * 100:.1f}%）、Sharpe "
@@ -450,6 +637,12 @@ def build(spec: PairSpec) -> None:
     )
     if spec.extra:
         body.append(f"<p>{spec.extra}</p>")
+    # What the US leg actually cost this sample, in bps of the notional it
+    # carried. The spec's flat bps is not what the 'ibkr' model charges, and
+    # printing it described a cost the engine never applied.
+    us_fee_bps_median = float(
+        (trades["tsm_fee_twd"] / trades["actual_leg_notional_twd"] * 10000.0).median()
+    )
     body.append(
         T.table(
             ["項目", "設定", "說明"],
@@ -459,7 +652,12 @@ def build(spec: PairSpec) -> None:
                 ["Warmup seed",
                  f"<code>{T.esc(spec.seed.name)}</code>" if seed is not None else "無",
                  "所有 window 交易同一段期間" if seed is not None else "各 window 自行 burn warmup"],
-                [f"{spec.equity_leg} 手續費", f"{spec.equity_fee_bps:g} bps", "單邊"],
+                [f"{spec.equity_leg} 手續費",
+                 ("IBKR 每股計費" if spec.equity_fee_model == "ibkr"
+                  else f"{spec.equity_fee_bps:g} bps"),
+                 ("單邊。$0.005/ADR、最低 $1.00，賣出另計 SEC/FINRA；"
+                  f"本樣本實收中位 {us_fee_bps_median:.2f} bps"
+                  if spec.equity_fee_model == "ibkr" else "單邊")],
                 [f"{spec.futures_leg} 手續費",
                  f"{spec.futures_fee_twd:,.0f} TWD / 口"
                  f"（{spec.futures_fee_twd / (trades['actual_leg_notional_twd'].median() / abs(trades['qff_contracts']).median()) * 10000:.2f} bps）",
@@ -555,7 +753,7 @@ def build(spec: PairSpec) -> None:
         "交易稅 Tax",
     ]
     cost_cols = ["crossing_cost_twd", "qff_fee_twd", "tsm_fee_twd", "qff_tax_twd"]
-    top = (surv if len(surv) else g).nlargest(5, "sharpe")
+    top = g.nlargest(5, "ann")
     cats: list[str] = []
     comps: dict[str, list[float]] = {n: [] for n in cost_names}
     for r in top.itertuples():
@@ -632,21 +830,34 @@ f"每次來回的成本幾乎與組態無關（本樣本 <b>{pick_total_bps:.1f}
         "付完盤口價差成本之後還剩多少緩衝，可以容忍盤口模型偏樂觀。</p>"
     )
     srows = []
-    for r in (surv if len(surv) else g).nlargest(8, "sharpe").itertuples():
+    surv_keys = {
+        (r.window, r.entry_z, r.exit_z) for r in surv.itertuples()
+    }
+    for r in g.nlargest(8, "ann").itertuples():
         srows.append([
             f"{r.window:.0f}", f"{r.entry_z:g}", f"{r.exit_z:g}",
-            f"{r.sharpe:.2f}", f"{r.trades:.0f}", f"{r.ret * 100:.2f}%",
+            f"{r.ann * 100:.1f}%", f"{r.ret * 100:.2f}%",
+            f"{r.sharpe:.2f}", f"{r.trades:.0f}",
             f"{r.maxdd * 100:.2f}%", f"{r.med_ticks:.2f}", f"{r.under1 * 100:.0f}%",
-            f"{r.neighbour:.2f}", f"{r.win * 100:.0f}%",
+            f"{r.win * 100:.0f}%",
+            "✓" if (r.window, r.entry_z, r.exit_z) in surv_keys else "✗",
         ])
     body.append(
         T.table(
-            ["window", "entry_z", "exit_z", "Sharpe", "交易", "報酬",
-             "maxDD", "中位 ticks", "<1 tick", "鄰域", "勝率"],
+            ["window", "entry_z", "exit_z", "年化", "報酬",
+             "Sharpe", "交易", "maxDD", "中位 ticks", "<1 tick", "勝率", "篩選"],
             srows, highlight=0,
-            number="Table 2", title="通過篩選的組態",
-            caption=f"通過全部四道門檻的 {len(surv)} 格中，依 Sharpe 排序前 8 名。"
-                    "第一列（加左側色條）為建議組態。",
+            number="Table 2", title="依線性年化報酬排序的組態",
+            caption=(
+                f"全網格 {len(g)} 格依線性年化報酬排序前 8 名，第一列（加左側色條）"
+                f"為本報告頭條組態。<strong>通過四道門檻者共 {len(surv)} 格</strong>"
+                + (
+                    "，頭條組態在其中。" if screened else
+                    "；<strong>頭條組態不在其中</strong>——它的年化最高，但品質門檻沒過，"
+                    "換句話說它的部分報酬落在 tick 雜訊之內而無法驗證。"
+                )
+                + "「篩選」欄標示每一格是否四道全過。"
+            ),
         )
     )
 
@@ -696,7 +907,7 @@ f"每次來回的成本幾乎與組態無關（本樣本 <b>{pick_total_bps:.1f}
     if len(results) > 1:
         body.append("<h3>區間對照</h3>")
         rows = []
-        for sg, gg, sv, pk, rs, tt in results:
+        for sg, gg, sv, pk, rs, tt, sc in results:
             st = grid.calculate_daily_return_stats(
                 rs.equity, initial_capital_twd=CAPITAL, annual_trading_days=252.0
             )
@@ -749,7 +960,15 @@ f"每次來回的成本幾乎與組態無關（本樣本 <b>{pick_total_bps:.1f}
         "閉市期間的不利波動與保證金壓力不在模型內。</p>"
         f"<p><strong>盤口模型。</strong>位移 {seg.displacement:.4f} 由有限的報價樣本量測而得。"
         f"若實際盤口更寬，盤口價差成本會等比例上升 —— 而它已是 {pick_cross_bps:.1f} bps、"
-        f"佔本組態全部成本的 {pick_cross / pick_total * 100:.0f}%。</p></div>"
+        f"佔本組態全部成本的 {pick_cross / pick_total * 100:.0f}%。</p>"
+        + (
+            "<p><strong>成本參數與資料不同源。</strong>永續腿的資料現在來自 OKX，"
+            "但位移與 bps 費率當初是在 Binance 的盤口上量測的。OKX 的簿子較薄，"
+            "因此這裡的成本很可能<strong>偏低估</strong>；在 OKX 重新量測之前，"
+            "本報告的成本面屬於沿用而非觀測。</p>"
+            if spec.key == "qff_tsm" else ""
+        )
+        + "</div>"
     )
 
     body.append(T.section("附錄 A", "完整參數網格"))

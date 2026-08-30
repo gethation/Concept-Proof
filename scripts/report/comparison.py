@@ -49,14 +49,31 @@ def sharpe(r: pd.Series) -> float:
 def evaluate(spec: pair.PairSpec) -> dict:
     """Grid, screen and pick on the common window, then keep trade detail."""
     spread, seed = pair.load_frames(spec)
+    # Carry the source segment's cost model across, not just its displacement:
+    # ref_price drives the 1/price scaling and regimes the per-bar tick
+    # schedule. Rebuilding the segment positionally dropped both, so this
+    # head-to-head priced each pair with a constant displacement while the
+    # per-pair reports priced them scaled -- two reports, same data, different
+    # costs.
+    source = spec.segments[0]
     seg = pair.Segment(
-        "common", COMMON_START, None, spec.segments[0].displacement,
-        spec.segments[0].note,
+        "common", COMMON_START, None, source.displacement, source.note,
+        ref_price=source.ref_price, regimes=source.regimes,
     )
     g = pair.run_grid(spec, spread, seed, seg)
     g["neighbour"] = pair.neighbour_sharpe(g)
     surv = pair.screen(g)
-    pick = (surv if len(surv) else g).nlargest(1, "sharpe").iloc[0]
+    # Same ranking rule as the per-pair reports: highest linearly-annualised
+    # return, with the screen carried as a label on the chosen cell.
+    pick = g.nlargest(1, "ann").iloc[0]
+    screened = bool(
+        len(surv)
+        and (
+            (surv["window"] == pick.window)
+            & (surv["entry_z"] == pick.entry_z)
+            & (surv["exit_z"] == pick.exit_z)
+        ).any()
+    )
     res, trades = pair.trade_detail(spec, spread, seed, seg, pick)
     s = res.summary
     days = (pd.Timestamp(s["end"]) - pd.Timestamp(s["start"])).total_seconds() / 86400.0
@@ -72,6 +89,7 @@ def evaluate(spec: pair.PairSpec) -> dict:
         gross_x=float(trades["actual_leg_notional_twd"].median() * 2 / pair.CAPITAL),
         ann=float(s["return_pct"]) * 365.0 / days,
         spec=spec, grid=g, surv=surv, pick=pick, res=res, trades=trades,
+        screened=screened,
         summary=s, daily=r, sharpe=sharpe(r), days=days, weekend=weekend,
         disp=seg.displacement,
         fee_gross=float(trades["total_fee_twd"].sum() / trades["gross_pnl_twd"].sum()),
@@ -87,11 +105,25 @@ def bootstrap_gap(a: pd.Series, b: pd.Series) -> dict:
     for i in range(BOOTSTRAP):
         pick = rng.choice(idx, size=len(idx), replace=True)
         gaps[i] = sharpe(joined["a"].iloc[pick]) - sharpe(joined["b"].iloc[pick])
-    lo, hi = np.percentile(gaps, [2.5, 97.5])
+    # A resample can draw a set of days with zero variance on one side -- easy
+    # when a configuration trades a handful of times and most days are flat --
+    # and sharpe() is NaN there. Those draws carry no information about the gap,
+    # so they are dropped rather than propagated into the percentiles; the count
+    # is returned because a large share of them IS the finding: the sample is
+    # too thin to resample.
+    finite = gaps[np.isfinite(gaps)]
+    degenerate = int(len(gaps) - len(finite))
+    if len(finite) < 2:
+        raise RuntimeError(
+            "Bootstrap produced no usable draws: both configurations are too "
+            "sparse on the common window to resample a Sharpe gap"
+        )
+    lo, hi = np.percentile(finite, [2.5, 97.5])
     return dict(
         days=len(joined), point=sharpe(joined["a"]) - sharpe(joined["b"]),
-        lo=float(lo), hi=float(hi), p_b=float((gaps < 0).mean()),
-        corr=float(joined["a"].corr(joined["b"])), draws=gaps,
+        lo=float(lo), hi=float(hi), p_b=float((finite < 0).mean()),
+        corr=float(joined["a"].corr(joined["b"])), draws=finite,
+        degenerate=degenerate,
     )
 
 
@@ -157,9 +189,11 @@ def main(argv: list[str]) -> int:
 
     rows = [
         row("最佳組態",
-            f"w{a['pick'].window:.0f} / e{a['pick'].entry_z:g} / x{a['pick'].exit_z:g}",
-            f"w{b['pick'].window:.0f} / e{b['pick'].entry_z:g} / x{b['pick'].exit_z:g}",
-            "各自網格篩選後的第一名"),
+            f"w{a['pick'].window:.0f} / e{a['pick'].entry_z:g} / x{a['pick'].exit_z:g}"
+            + ("" if a["screened"] else "（未通過篩選）"),
+            f"w{b['pick'].window:.0f} / e{b['pick'].entry_z:g} / x{b['pick'].exit_z:g}"
+            + ("" if b["screened"] else "（未通過篩選）"),
+            "各自網格中線性年化報酬最高者；標註者為該格未通過四道品質門檻"),
         row("單邊位移", f"{a['disp']:.4f}", f"{b['disp']:.4f}", "spread 單位，各自量測"),
         row("期間", f"{a['days']:.0f} 日曆日", f"{b['days']:.0f} 日曆日", ""),
         row("交易筆數", f"{len(a['trades'])}", f"{len(b['trades'])}", ""),
@@ -215,7 +249,12 @@ def main(argv: list[str]) -> int:
             ),
             f"分布橫跨零：區間 <b>[{lo_i:+.2f}, {hi_i:+.2f}]</b>，"
             f"落在零以下的比例為 <b>{bs['p_b'] * 100:.1f}%</b>。"
-            "點估計是實數，但它與零之間的距離小於樣本雜訊，因此不足以據此選邊。",
+            "點估計是實數，但它與零之間的距離小於樣本雜訊，因此不足以據此選邊。"
+            + (
+                f"（{bs['degenerate']:,}/{BOOTSTRAP:,} 次重抽樣因單邊無變異而無法定義 "
+                "Sharpe，已排除；比例偏高本身就說明樣本太薄。）"
+                if bs.get("degenerate") else ""
+            ),
             "兩配對的日報酬序列",
         ).render()
     )

@@ -15,10 +15,14 @@ for its series, so re-running is safe and idempotent:
     python scripts/ingest/taifex_1m.py --product QFF
     python scripts/ingest/tv_umc.py
     python scripts/ingest/tv_ccf_umc.py
-    python scripts/ingest/ccxt_ohlcv.py --feed binance_tsmusdtp
+    python scripts/ingest/qff_tsm_15m.py          # OKX perp leg (1m + 15m grid)
     python scripts/ingest/ccxt_ohlcv.py --feed bitopro_usdttwd
     python scripts/features/spread.py --pair ccf_umc --interval 1m --weekend-policy none
     python scripts/features/spread.py --pair qff_tsm --interval 1m
+
+The QFF/TSM US leg is OKX, not Binance: this list named the Binance feed long
+after lib/pairs.py switched, so the documented refresh updated a file nothing
+reads and left the leg the spread is actually built from untouched.
 
 These commands used to carry explicit --out paths naming a dated capture
 (``..._0812.csv``). That is what broke the refresh: the download step wrote the
