@@ -131,6 +131,26 @@ def download_zip(
     return path
 
 
+# TAIFEX publishes the same time-and-sales file in two editions. The free
+# 30-day download is the English one (DailydownloadCSV_eng); the purchased
+# historical archive is the Chinese one, Big5-encoded, with identical columns
+# under different names. Translating on read means one schema reaches
+# normalize_time_sales, so neither edition needs its own parser -- and a
+# purchased archive merges into a file built from free downloads without a
+# second code path to keep in step.
+ZH_COLUMN_ALIASES = {
+    "成交日期": "Date",
+    "商品代號": "Product Code",
+    "到期月份(週別)": "Contract Month(Week)",
+    "成交時間": "Time of Trades",
+    "成交價格": "Trade Price",
+    "成交數量(B+S)": "Volume(Buy+Sell)",
+    "近月價格": "Price for Nearer Delivery Month Contract",
+    "遠月價格": "Price for Further Delivery Month Contract",
+    "開盤集合競價": "Opening Call Auction",
+}
+
+
 def read_csv_from_zip(path: Path) -> pd.DataFrame:
     with zipfile.ZipFile(path) as archive:
         csv_names = [name for name in archive.namelist() if name.lower().endswith(".csv")]
@@ -143,6 +163,7 @@ def read_csv_from_zip(path: Path) -> pd.DataFrame:
         try:
             frame = pd.read_csv(io.BytesIO(raw), dtype=str, encoding=encoding)
             frame.columns = [str(column).strip() for column in frame.columns]
+            frame = frame.rename(columns=ZH_COLUMN_ALIASES)
             return frame
         except UnicodeDecodeError as exc:
             last_error = exc

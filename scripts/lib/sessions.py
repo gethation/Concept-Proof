@@ -28,13 +28,32 @@ def us_session_day(timestamps: pd.DatetimeIndex) -> pd.DatetimeIndex:
     return (timestamps - pd.Timedelta(hours=12)).normalize()
 
 
-def build_taifex_session_index(close: pd.Series) -> pd.DatetimeIndex:
-    """Every TAIFEX session minute spanned by a close series.
+def build_taifex_session_index(
+    close: pd.Series, interval_minutes: int = 1
+) -> pd.DatetimeIndex:
+    """Every TAIFEX session bar-start spanned by a close series.
 
-    Built from the clock rather than from the observed bars, so a minute with no
+    Built from the clock rather than from the observed bars, so a bar with no
     trade still gets a row (and is later forward-filled and flagged) instead of
     silently vanishing from the index.
+
+    TAIFEX sessions do not start on the hour, so a coarser grid is anchored to
+    the session open rather than to midnight: the day session runs 08:45 and the
+    night session 17:25, which puts a 15-minute night grid on :25/:40/:55/:10
+    and the day grid on :45/:00/:15/:30. Anchoring to midnight instead would
+    miss every night bar.
+
+    The closing bar differs by interval, and deliberately. At 1m the session's
+    final minute is kept, because every stored 1m series has it and dropping it
+    would move the spread. Above 1m a bar is labelled by its START, so one
+    starting AT the close would cover only time after the session -- the day
+    session's 13:45 does not exist as a 15m bar, while the night session's 04:55
+    does, because it still holds five minutes of session.
     """
+    if interval_minutes < 1:
+        raise ValueError("interval_minutes must be at least 1")
+    freq = f"{interval_minutes}min"
+    last_offset = pd.Timedelta(minutes=0 if interval_minutes == 1 else 1)
     timestamps = close.index
     minute = timestamps.hour * 60 + timestamps.minute
     local_day = timestamps.normalize()
@@ -51,12 +70,12 @@ def build_taifex_session_index(close: pd.Series) -> pd.DatetimeIndex:
     for session_day in sorted(set(local_day[day_clock])):
         start = session_day + pd.Timedelta(minutes=DAY_START_MINUTE)
         end = session_day + pd.Timedelta(minutes=DAY_END_MINUTE)
-        ranges.append(pd.date_range(start, end, freq="min"))
+        ranges.append(pd.date_range(start, end - last_offset, freq=freq))
 
     for session_day in sorted(set(night_session_start.loc[night_clock])):
         start = session_day + pd.Timedelta(minutes=NIGHT_START_MINUTE)
         end = session_day + pd.Timedelta(days=1, minutes=NIGHT_END_MINUTE)
-        ranges.append(pd.date_range(start, end, freq="min"))
+        ranges.append(pd.date_range(start, end - last_offset, freq=freq))
 
     if not ranges:
         raise RuntimeError(

@@ -20,7 +20,13 @@ from lib.barsio import (  # noqa: E402
 from lib.timeutil import TAIPEI_TZ  # noqa: E402
 from lib.timeutil import parse_taipei as parse_taipei_timestamp  # noqa: E402
 
-DEFAULT_START = "2026-02-01 00:00:00+08:00"
+# Was 2026-02-01, which predated the 1h series and silently truncated it to
+# six months. The bound exists to stop a fetch wandering into whatever the
+# feed decides to return, not to cap history: the fine intervals cannot
+# reach this far back anyway, so lowering it only lets 1h reach its full
+# depth. Every writer append-merges, so this adds rows before the current
+# start and changes nothing already on disk.
+DEFAULT_START = "2025-01-01 00:00:00+08:00"
 DEFAULT_OUT_DIR = paths.BARS
 
 INTERVALS = {
@@ -36,11 +42,17 @@ CCF_SESSION_HOURS = set(range(8, 14)) | set(range(17, 24)) | set(range(0, 5))
 UMC_SESSION_HOURS = set(range(21, 24)) | set(range(0, 6))
 FX_SESSION_HOURS = set(range(0, 24))
 
+# 1h is here for reach, not resolution. The anonymous endpoint returns a fixed
+# ~5-6k bars per interval, so the calendar span it covers is bars x interval:
+# CCF1! gets 18 days at 1m, 117 at 15m and 602 at 1h. Since TAIFEX's own
+# time-and-sales archive is only 30 trading days deep, hourly is the only
+# series that reaches back more than a year -- and the only way to ask whether
+# this spread behaved differently a year ago.
 TV_DOWNLOADS = [
-    ("TAIFEX", "CCF1!", "taifex", "ccf1", ["5m", "15m"],
-     {"5m": 50_000, "15m": 30_000}, CCF_SESSION_HOURS),
-    ("NYSE", "UMC", "nyse", "umc", ["5m", "15m"],
-     {"5m": 30_000, "15m": 15_000}, UMC_SESSION_HOURS),
+    ("TAIFEX", "CCF1!", "taifex", "ccf1", ["5m", "15m", "1h"],
+     {"5m": 50_000, "15m": 30_000, "1h": 10_000}, CCF_SESSION_HOURS),
+    ("NYSE", "UMC", "nyse", "umc", ["5m", "15m", "1h"],
+     {"5m": 30_000, "15m": 15_000, "1h": 10_000}, UMC_SESSION_HOURS),
     ("FX_IDC", "USDTWD", "fxidc", "usdtwd", ["5m", "15m", "1h"],
      {"5m": 60_000, "15m": 30_000, "1h": 10_000}, FX_SESSION_HOURS),
 ]

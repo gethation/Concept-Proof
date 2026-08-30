@@ -32,6 +32,18 @@ ccxt>=4.5,<5
 # (scripts/ingest/taifex_ticks.py).
 requests>=2.32,<3
 
+# ib_async: UMC 1-minute history from Interactive Brokers
+# (scripts/ingest/ibkr_umc.py). Needs a running TWS or IB Gateway with the API
+# enabled; nothing reachable from make_reports.py imports it, so the pipeline
+# runs without it.
+#
+# It declares tzdata<2026.0 and pip will say so. Do not let it win: pandas and
+# numpy are pinned here because spread and z-score outputs are verified
+# byte-identical, and tzdata is part of that surface. Verified 2026-08-26 that
+# ib_async 2.1.0 imports and runs against tzdata 2026.3, and that the 1m spread
+# rebuilds byte-identical either way.
+ib_async>=2.0,<3
+
 # tvdatafeed: TradingView bars for the NYSE, TAIFEX and FX_IDC legs
 # (scripts/ingest/tv_umc.py, tv_ccf_umc.py).
 #
